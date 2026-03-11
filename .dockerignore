@@ -1,0 +1,16 @@
+.git
+.github
+.env
+.env*
+_build
+deps
+node_modules
+ui/node_modules
+ui/dist
+ui/.vite
+test
+*.db
+*.db-*
+.elixir_ls
+.vscode
+.idea

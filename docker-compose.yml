@@ -1,0 +1,92 @@
+services:
+  db:
+    container_name: forgecast-db
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: forgecast_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    container_name: forgecast-api
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "ecto://postgres:postgres@db:5432/forgecast_dev"
+      PORT: "4000"
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      GITHUB_OAUTH_CLIENT_ID: "${GITHUB_OAUTH_CLIENT_ID:-}"
+      GITHUB_OAUTH_CLIENT_SECRET: "${GITHUB_OAUTH_CLIENT_SECRET:-}"
+      GITHUB_OAUTH_REDIRECT_URI: "${GITHUB_OAUTH_REDIRECT_URI:-http://localhost:3000/api/auth/github/callback}"
+      POLLER: "${POLLER:-true}"
+      CORS_ORIGINS: "http://localhost:3000,http://localhost:5173"
+      MIX_ENV: prod
+    ports:
+      - "4000:4000"
+    volumes:
+      - og_images:/data
+    restart: unless-stopped
+
+  app:
+    container_name: forgecast-app
+    build:
+      context: ./ui
+      args:
+        VITE_API_URL: /api
+    depends_on:
+      - api
+    environment:
+      VITE_API_URL: /api
+      VITE_API_PROXY_TARGET: "http://api:4000"
+    ports:
+      - "3000:5173"
+    volumes:
+      - ./ui/src:/app/src
+      - ./ui/public:/app/public
+      - ./ui/index.html:/app/index.html
+      - ./ui/vite.config.ts:/app/vite.config.ts
+    command: ["bun", "run", "dev", "--host", "0.0.0.0", "--port", "5173"]
+    restart: unless-stopped
+
+  app-dev:
+    container_name: forgecast-app-dev
+    build:
+        context: ./ui
+        dockerfile: Dockerfile.dev
+    depends_on:
+        - api
+    environment:
+        VITE_API_URL: http://localhost:4000/api
+    ports:
+        - "5173:5173"
+    volumes:
+        - ./ui/src:/app/src
+        - ./ui/public:/app/public
+        - ./ui/index.html:/app/index.html
+        - ./ui/vite.config.ts:/app/vite.config.ts
+        - ./ui/tsconfig.json:/app/tsconfig.json
+        - ./ui/tsconfig.app.json:/app/tsconfig.app.json
+        - ./ui/tsconfig.node.json:/app/tsconfig.node.json
+        - ./ui/env.d.ts:/app/env.d.ts
+        - ./ui/components.json:/app/components.json
+        - ./ui/eslint.config.ts:/app/eslint.config.ts
+        - app_dev_node_modules:/app/node_modules
+    profiles:
+        - dev
+    restart: unless-stopped
+
+volumes:
+    pgdata:
+    og_images:
+    app_dev_node_modules:
