@@ -112,18 +112,8 @@ db:
     {{clear}}
     docker compose up db
 
-# Start all services in Docker.
-up:
-    {{clear}}
-    docker compose up --build db api
-
-# Start the backend and database only, without the poller.
-up-api:
-    {{clear}}
-    POLLER=false docker compose up --build db api
-
 # Start all services including the production UI.
-up-all:
+up:
     {{clear}}
     docker compose up --build
 

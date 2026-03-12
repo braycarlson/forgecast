@@ -26,9 +26,11 @@ const open = ref(false)
 const search = ref("")
 
 const sorted = computed(() => {
-    const favs = props.options.filter(o => props.favorites.has(o))
-    const rest = props.options.filter(o => !props.favorites.has(o))
-    const all = [...favs, ...rest]
+    const favSelected = props.options.filter(o => props.favorites.has(o) && props.selected.has(o))
+    const favUnselected = props.options.filter(o => props.favorites.has(o) && !props.selected.has(o))
+    const selected = props.options.filter(o => !props.favorites.has(o) && props.selected.has(o))
+    const rest = props.options.filter(o => !props.favorites.has(o) && !props.selected.has(o))
+    const all = [...favSelected, ...favUnselected, ...selected, ...rest]
 
     if (!search.value) return all
     const q = search.value.toLowerCase()
