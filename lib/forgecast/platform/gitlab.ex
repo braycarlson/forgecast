@@ -38,10 +38,6 @@ defmodule Forgecast.Platform.Gitlab do
         "r" => "R"
     }
 
-    # Linguist names used by GitLab's with_programming_language filter.
-    # This is the same as @language_map but used for query input rather
-    # than normalizing output. Unmapped languages get title-cased as a
-    # best-effort fallback since Linguist names are typically capitalized.
     @query_language_map @language_map
 
     @impl true
@@ -130,9 +126,8 @@ defmodule Forgecast.Platform.Gitlab do
         end)
     end
 
-    defp strategy_params(%Strategy{type: :top_starred, min_stars: min_stars}) do
-        [order_by: "star_count", sort: "desc", min_access_level: 0] ++
-            if(min_stars > 0, do: [stars_count_min: min_stars], else: [])
+    defp strategy_params(%Strategy{type: :top_starred}) do
+        [order_by: "star_count", sort: "desc"]
     end
 
     defp strategy_params(%Strategy{type: :recently_created, date_range: days}) do
@@ -145,10 +140,9 @@ defmodule Forgecast.Platform.Gitlab do
         [order_by: "last_activity_at", sort: "desc", last_activity_after: date]
     end
 
-    defp strategy_params(%Strategy{type: :rising, min_stars: min_stars, date_range: days}) do
+    defp strategy_params(%Strategy{type: :rising, date_range: days}) do
         date = Date.utc_today() |> Date.add(-days) |> Date.to_iso8601()
-        [order_by: "star_count", sort: "desc", created_after: date] ++
-            if(min_stars > 0, do: [stars_count_min: min_stars], else: [])
+        [order_by: "star_count", sort: "desc", created_after: date]
     end
 
     defp parse_repo(raw, language) do
