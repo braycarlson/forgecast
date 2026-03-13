@@ -9,6 +9,7 @@ defmodule Forgecast.Platform.Gitlab do
     @behaviour Forgecast.Platform
 
     alias Forgecast.Platform.{ETag, Header, Helper, Result}
+    alias Forgecast.Poller.Strategy
 
     @base_url "https://gitlab.com/api/v4"
     @search_etag_table :gitlab_search_etags
@@ -51,11 +52,11 @@ defmodule Forgecast.Platform.Gitlab do
         | {:error, term()}
     def search(language, opts \\ []) do
         init_etag_cache()
-        strategy = Keyword.get(opts, :strategy, :top_starred)
+        strategy = Keyword.get(opts, :strategy, %Strategy{type: :top_starred})
         page = Keyword.get(opts, :page, 1)
         url = build_url(language, strategy, page)
 
-        search_key = {language, strategy, page}
+        search_key = {language, strategy.type, page}
         headers = ETag.conditional_headers(@search_etag_table, search_key, base_headers())
 
         case Req.get(url, headers: headers) do
@@ -117,7 +118,7 @@ defmodule Forgecast.Platform.Gitlab do
         end
     end
 
-    defp build_url(language, strategy, page) do
+    defp build_url(language, %Strategy{} = strategy, page) do
         params = strategy_params(strategy)
         gl_language = query_language(language)
 
@@ -129,20 +130,25 @@ defmodule Forgecast.Platform.Gitlab do
         end)
     end
 
-    defp strategy_params(:top_starred), do: [order_by: "star_count", sort: "desc"]
+    defp strategy_params(%Strategy{type: :top_starred, min_stars: min_stars}) do
+        [order_by: "star_count", sort: "desc", min_access_level: 0] ++
+            if(min_stars > 0, do: [stars_count_min: min_stars], else: [])
+    end
 
-    defp strategy_params(:recently_created) do
-        date = Date.utc_today() |> Date.add(-7) |> Date.to_iso8601()
+    defp strategy_params(%Strategy{type: :recently_created, date_range: days}) do
+        date = Date.utc_today() |> Date.add(-days) |> Date.to_iso8601()
         [order_by: "created_at", sort: "desc", created_after: date]
     end
 
-    defp strategy_params(:recently_pushed) do
-        [order_by: "last_activity_at", sort: "desc"]
+    defp strategy_params(%Strategy{type: :recently_pushed, date_range: days}) do
+        date = Date.utc_today() |> Date.add(-days) |> Date.to_iso8601()
+        [order_by: "last_activity_at", sort: "desc", last_activity_after: date]
     end
 
-    defp strategy_params(:rising) do
-        date = Date.utc_today() |> Date.add(-30) |> Date.to_iso8601()
-        [order_by: "star_count", sort: "desc", created_after: date]
+    defp strategy_params(%Strategy{type: :rising, min_stars: min_stars, date_range: days}) do
+        date = Date.utc_today() |> Date.add(-days) |> Date.to_iso8601()
+        [order_by: "star_count", sort: "desc", created_after: date] ++
+            if(min_stars > 0, do: [stars_count_min: min_stars], else: [])
     end
 
     defp parse_repo(raw, language) do
@@ -174,7 +180,6 @@ defmodule Forgecast.Platform.Gitlab do
     defp query_language(lang) when is_binary(lang) do
         case Map.get(@query_language_map, String.downcase(lang)) do
             nil ->
-                # Fallback: title-case for Linguist compatibility
                 lang
                 |> String.split("-")
                 |> Enum.map_join("-", &String.capitalize/1)

@@ -3,11 +3,10 @@ defmodule Forgecast.Poller.Scheduler do
     Decides whether the next poll cycle should discover new repos
     or monitor existing ones, and selects the appropriate target.
 
-    The discovery-to-monitoring ratio shifts dynamically based on
-    how many repos the platform already tracks. Early on, almost
-    all budget goes to discovery. Once a baseline is established,
-    the balance shifts toward keeping existing data fresh. At
-    maturity (1000+ repos), discovery drops to 15% of budget.
+    The discovery-to-monitoring ratio is driven by the active
+    strategy profile (see `Forgecast.Poller.Strategy`), which
+    defines ratios for initial, normal, and mature phases based
+    on how many repos the platform already tracks.
 
     Accepts a cached repo count to avoid querying the database on
     every poll tick.
@@ -16,27 +15,17 @@ defmodule Forgecast.Poller.Scheduler do
     alias Forgecast.Repo
     alias Forgecast.Schema.Repository
     alias Forgecast.Velocity
+    alias Forgecast.Poller.Strategy
 
     import Ecto.Query
 
-    @initial_threshold 100
-    @mature_threshold 1000
-    @initial_discovery_ratio 0.9
-    @normal_discovery_ratio 0.3
-    @mature_discovery_ratio 0.15
-
     @type task ::
-        {:discover, String.t(), Forgecast.Poller.Strategy.t()}
+        {:discover, String.t(), Strategy.t()}
         | {:monitor, Repository.t()}
 
     @spec next_task(String.t(), [String.t()], non_neg_integer(), non_neg_integer(), non_neg_integer()) :: task()
     def next_task(platform, languages, language_index, strategy_index, repo_count) do
-        ratio =
-            cond do
-                repo_count < @initial_threshold -> @initial_discovery_ratio
-                repo_count < @mature_threshold -> @normal_discovery_ratio
-                true -> @mature_discovery_ratio
-            end
+        ratio = Strategy.discovery_ratio(repo_count)
 
         if :rand.uniform() < ratio do
             pick_discovery(languages, language_index, strategy_index)
@@ -83,7 +72,7 @@ defmodule Forgecast.Poller.Scheduler do
 
     defp pick_discovery(languages, language_index, strategy_index) do
         language = Enum.at(languages, rem(language_index, length(languages)))
-        strategy = Forgecast.Poller.Strategy.at(strategy_index)
+        strategy = Strategy.at(strategy_index)
         {:discover, language, strategy}
     end
 

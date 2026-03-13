@@ -10,6 +10,7 @@ defmodule Forgecast.Platform.Github do
     @behaviour Forgecast.Platform
 
     alias Forgecast.Platform.{ETag, Header, Helper, Result}
+    alias Forgecast.Poller.Strategy
 
     @base_url "https://api.github.com"
     @fetch_etag_table :github_fetch_etags
@@ -23,12 +24,12 @@ defmodule Forgecast.Platform.Github do
         | {:error, term()}
     def search(language, opts \\ []) do
         init_etag_cache()
-        strategy = Keyword.get(opts, :strategy, :top_starred)
+        strategy = Keyword.get(opts, :strategy, %Strategy{type: :top_starred})
         page = Keyword.get(opts, :page, 1)
         {query, sort, order} = build_query(language, strategy)
         url = "#{@base_url}/search/repositories?q=#{URI.encode(query)}&sort=#{sort}&order=#{order}&per_page=25&page=#{page}"
 
-        search_key = {language, strategy, page}
+        search_key = {language, strategy.type, page}
         headers = ETag.conditional_headers(@search_etag_table, search_key, base_headers())
 
         case Req.get(url, headers: headers) do
@@ -84,24 +85,24 @@ defmodule Forgecast.Platform.Github do
         end
     end
 
-    defp build_query(language, :top_starred) do
-        date = Date.utc_today() |> Date.add(-90) |> Date.to_iso8601()
-        {"language:#{language} pushed:>#{date} stars:>100", "stars", "desc"}
+    defp build_query(language, %Strategy{type: :top_starred, min_stars: min_stars, date_range: days}) do
+        date = Date.utc_today() |> Date.add(-days) |> Date.to_iso8601()
+        {"language:#{language} pushed:>#{date} stars:>#{min_stars}", "stars", "desc"}
     end
 
-    defp build_query(language, :recently_created) do
-        date = Date.utc_today() |> Date.add(-7) |> Date.to_iso8601()
-        {"language:#{language} created:>#{date} stars:>5", "stars", "desc"}
+    defp build_query(language, %Strategy{type: :recently_created, min_stars: min_stars, date_range: days}) do
+        date = Date.utc_today() |> Date.add(-days) |> Date.to_iso8601()
+        {"language:#{language} created:>#{date} stars:>#{min_stars}", "stars", "desc"}
     end
 
-    defp build_query(language, :recently_pushed) do
-        date = Date.utc_today() |> Date.add(-3) |> Date.to_iso8601()
-        {"language:#{language} pushed:>#{date} stars:>25", "stars", "desc"}
+    defp build_query(language, %Strategy{type: :recently_pushed, min_stars: min_stars, date_range: days}) do
+        date = Date.utc_today() |> Date.add(-days) |> Date.to_iso8601()
+        {"language:#{language} pushed:>#{date} stars:>#{min_stars}", "stars", "desc"}
     end
 
-    defp build_query(language, :rising) do
-        date = Date.utc_today() |> Date.add(-30) |> Date.to_iso8601()
-        {"language:#{language} created:>#{date} stars:>50", "stars", "desc"}
+    defp build_query(language, %Strategy{type: :rising, min_stars: min_stars, date_range: days}) do
+        date = Date.utc_today() |> Date.add(-days) |> Date.to_iso8601()
+        {"language:#{language} created:>#{date} stars:>#{min_stars}", "stars", "desc"}
     end
 
     defp parse_repo(raw) do

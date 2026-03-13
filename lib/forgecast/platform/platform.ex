@@ -4,6 +4,11 @@ defmodule Forgecast.Platform do
 
     Each platform must implement `search/2` for bulk discovery
     and `fetch/1` for single-repo monitoring updates.
+
+    The `search/2` opts keyword list may include:
+      - `:strategy` — a `%Forgecast.Poller.Strategy{}` struct
+        carrying min_stars, date_range, page_limit, and cooldown
+      - `:page` — the page number for paginated results
     """
 
     alias Forgecast.Platform.Result

@@ -8,6 +8,10 @@ defmodule Forgecast.Poller.Worker do
     whose `next_check_at` has elapsed, updating snapshots and
     rescheduling based on observed velocity.
 
+    Strategy parameters (page limits, cooldowns, star thresholds)
+    are read from the active strategy struct, which is driven by
+    the configured profile (see `Forgecast.Poller.Strategy`).
+
     Adaptive pacing consumes a fraction of the platform's rate budget
     derived from the rate-limit headers. Exponential backoff kicks in
     on errors, and a hard budget cap prevents runaway requests.
@@ -28,14 +32,12 @@ defmodule Forgecast.Poller.Worker do
     use GenServer
     require Logger
 
-    alias Forgecast.Poller.{Budget, Scheduler}
+    alias Forgecast.Poller.{Budget, Scheduler, Strategy}
 
     @default_interval :timer.seconds(10)
     @max_backoff :timer.minutes(5)
     @budget_fraction 0.8
     @repo_count_refresh_cycles 20
-    @max_discovery_page 4
-    @discovery_cooldown_ms :timer.minutes(30)
     @max_page_hashes 500
 
     @type t :: %__MODULE__{
@@ -136,17 +138,17 @@ defmodule Forgecast.Poller.Worker do
         end
     end
 
-    def handle_info({ref, {:discover, result, page_key, page}}, %{task_ref: ref} = state) do
+    def handle_info({ref, {:discover, result, page_key, page, strategy}}, %{task_ref: ref} = state) do
         Process.demonitor(ref, [:flush])
         state = %{state | task_ref: nil}
 
         state =
             case result do
                 {:ok, repos, rate_info} ->
-                    handle_discovery_success(state, repos, rate_info, page_key, page)
+                    handle_discovery_success(state, repos, rate_info, page_key, page, strategy)
 
                 {:not_modified, rate_info} ->
-                    handle_discovery_not_modified(state, rate_info, page_key)
+                    handle_discovery_not_modified(state, rate_info, page_key, strategy)
 
                 {:rate_limited, rate_info} ->
                     handle_rate_limit(state, rate_info)
@@ -199,8 +201,9 @@ defmodule Forgecast.Poller.Worker do
     def handle_call(:status, _from, state) do
         info = %{
             platform: state.platform,
+            profile: Strategy.profile(),
             current_language: Enum.at(state.languages, state.language_index),
-            current_strategy: Forgecast.Poller.Strategy.at(state.strategy_index),
+            current_strategy: Strategy.at(state.strategy_index).type,
             language_index: state.language_index,
             strategy_index: state.strategy_index,
             total_ingested: state.total_ingested,
@@ -237,10 +240,10 @@ defmodule Forgecast.Poller.Worker do
 
         case task do
             {:discover, language, strategy} ->
-                page_key = {language, strategy}
+                page_key = {language, strategy.type}
 
                 if on_cooldown?(state, page_key) do
-                    Logger.debug("[Poller/#{state.platform}] Skipping #{language}/#{strategy} (cooldown)")
+                    Logger.debug("[Poller/#{state.platform}] Skipping #{language}/#{strategy.type} (cooldown)")
 
                     state =
                         state
@@ -252,11 +255,11 @@ defmodule Forgecast.Poller.Worker do
                 else
                     page = Map.get(state.page_state, page_key, 1)
 
-                    Logger.info("[Poller/#{state.platform}] Discovering #{language} (#{strategy}) page #{page}")
+                    Logger.info("[Poller/#{state.platform}] Discovering #{language} (#{strategy.type}) page #{page}")
 
                     ref =
                         Task.Supervisor.async_nolink(Forgecast.TaskSupervisor, fn ->
-                            {:discover, state.module.search(language, strategy: strategy, page: page), page_key, page}
+                            {:discover, state.module.search(language, strategy: strategy), page_key, page, strategy}
                         end)
 
                     {:noreply, %{state | task_ref: ref.ref}}
@@ -281,8 +284,8 @@ defmodule Forgecast.Poller.Worker do
         end
     end
 
-    defp set_cooldown(state, page_key) do
-        expires_at = System.monotonic_time(:millisecond) + @discovery_cooldown_ms
+    defp set_cooldown(state, page_key, cooldown_ms) do
+        expires_at = System.monotonic_time(:millisecond) + cooldown_ms
         %{state | cooldowns: Map.put(state.cooldowns, page_key, expires_at)}
     end
 
@@ -302,15 +305,15 @@ defmodule Forgecast.Poller.Worker do
 
     defp trim_page_hashes(hashes), do: hashes
 
-    defp handle_discovery_success(state, repos, rate_info, page_key, page) do
-        {language, strategy} = page_key
-        hash_key = {language, strategy, page}
+    defp handle_discovery_success(state, repos, rate_info, page_key, page, strategy) do
+        {language, strategy_type} = page_key
+        hash_key = {language, strategy_type, page}
         current_hash = hash_results(repos)
         previous_hash = Map.get(state.page_hashes, hash_key)
 
         {count, state} =
             if previous_hash == current_hash do
-                Logger.debug("[Poller/#{state.platform}] Unchanged results for #{language} (#{strategy}) page #{page}, skipping ingestion")
+                Logger.debug("[Poller/#{state.platform}] Unchanged results for #{language} (#{strategy_type}) page #{page}, skipping ingestion")
                 {0, state}
             else
                 results = Forgecast.Ingester.ingest(repos)
@@ -323,16 +326,13 @@ defmodule Forgecast.Poller.Worker do
                 {ingested, %{state | page_hashes: updated_hashes}}
             end
 
-        Logger.info("[Poller/#{state.platform}] Discovered #{count} repos for #{language} (#{strategy}) page #{page}")
+        Logger.info("[Poller/#{state.platform}] Discovered #{count} repos for #{language} (#{strategy_type}) page #{page}")
 
-        # If we got a full page, advance to next page next time.
-        # If we got fewer results or hit max page, reset to page 1
-        # and start a cooldown so we don't re-poll stale results.
         {new_page, state} =
-            if length(repos) >= 25 and page < @max_discovery_page do
+            if length(repos) >= 25 and page < strategy.page_limit do
                 {page + 1, state}
             else
-                {1, set_cooldown(state, page_key)}
+                {1, set_cooldown(state, page_key, strategy.cooldown_ms)}
             end
 
         page_state = Map.put(state.page_state, page_key, new_page)
@@ -349,12 +349,12 @@ defmodule Forgecast.Poller.Worker do
         |> schedule_adaptive()
     end
 
-    defp handle_discovery_not_modified(state, rate_info, page_key) do
-        {language, strategy} = page_key
-        Logger.debug("[Poller/#{state.platform}] Search not modified for #{language} (#{strategy}), starting cooldown")
+    defp handle_discovery_not_modified(state, rate_info, page_key, strategy) do
+        {language, strategy_type} = page_key
+        Logger.debug("[Poller/#{state.platform}] Search not modified for #{language} (#{strategy_type}), starting cooldown")
 
         state
-        |> set_cooldown(page_key)
+        |> set_cooldown(page_key, strategy.cooldown_ms)
         |> Map.merge(%{
             error_streak: 0,
             total_not_modified: state.total_not_modified + 1,
@@ -381,8 +381,6 @@ defmodule Forgecast.Poller.Worker do
     end
 
     defp handle_monitor_not_modified(state, rate_info, repo) do
-        # Nothing changed — push the next check out further since
-        # re-checking sooner would just yield another 304.
         current_interval = Scheduler.compute_check_interval(repo)
         extended = min(current_interval * 2, 86_400)
         Scheduler.update_next_check(repo, extended)
@@ -428,7 +426,7 @@ defmodule Forgecast.Poller.Worker do
 
         new_strat =
             if new_lang == 0,
-                do: rem(state.strategy_index + 1, Forgecast.Poller.Strategy.count()),
+                do: rem(state.strategy_index + 1, Strategy.count()),
                 else: state.strategy_index
 
         %{state | language_index: new_lang, strategy_index: new_strat}

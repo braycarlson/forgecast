@@ -9,6 +9,7 @@ defmodule Forgecast.Platform.Codeberg do
     @behaviour Forgecast.Platform
 
     alias Forgecast.Platform.{ETag, Header, Helper, Result}
+    alias Forgecast.Poller.Strategy
 
     @base_url "https://codeberg.org/api/v1"
     @search_etag_table :codeberg_search_etags
@@ -22,12 +23,12 @@ defmodule Forgecast.Platform.Codeberg do
         | {:error, term()}
     def search(language, opts \\ []) do
         init_etag_cache()
-        strategy = Keyword.get(opts, :strategy, :top_starred)
+        strategy = Keyword.get(opts, :strategy, %Strategy{type: :top_starred})
         page = Keyword.get(opts, :page, 1)
         {sort, order} = strategy_params(strategy)
         url = "#{@base_url}/repos/search?q=&language=#{language}&sort=#{sort}&order=#{order}&limit=25&page=#{page}"
 
-        search_key = {language, strategy, page}
+        search_key = {language, strategy.type, page}
         headers = ETag.conditional_headers(@search_etag_table, search_key, base_headers())
 
         case Req.get(url, headers: headers) do
@@ -83,10 +84,10 @@ defmodule Forgecast.Platform.Codeberg do
         end
     end
 
-    defp strategy_params(:top_starred), do: {"stars", "desc"}
-    defp strategy_params(:recently_created), do: {"created", "desc"}
-    defp strategy_params(:recently_pushed), do: {"updated", "desc"}
-    defp strategy_params(:rising), do: {"stars", "desc"}
+    defp strategy_params(%Strategy{type: :top_starred}), do: {"stars", "desc"}
+    defp strategy_params(%Strategy{type: :recently_created}), do: {"created", "desc"}
+    defp strategy_params(%Strategy{type: :recently_pushed}), do: {"updated", "desc"}
+    defp strategy_params(%Strategy{type: :rising}), do: {"stars", "desc"}
 
     defp parse_repo(raw) do
         %Result{
