@@ -3,8 +3,12 @@ import Config
 if url = System.get_env("DATABASE_URL") do
     config :forgecast, Forgecast.Repo,
         url: url,
-        pool_size: String.to_integer(System.get_env("POOL_SIZE", "20")),
-        socket_options: if(System.get_env("FLY_APP_NAME"), do: [:inet6], else: [])
+        pool_size: String.to_integer(System.get_env("POOL_SIZE", "10")),
+        socket_options: if(System.get_env("FLY_APP_NAME"), do: [:inet6], else: []),
+        queue_target: 5_000,
+        queue_interval: 5_000,
+        connect_timeout: 30_000,
+        timeout: 30_000
 end
 
 if host = System.get_env("DB_HOST") do
