@@ -3,7 +3,7 @@ import Config
 if url = System.get_env("DATABASE_URL") do
     config :forgecast, Forgecast.Repo,
         url: url,
-        pool_size: String.to_integer(System.get_env("POOL_SIZE", "10")),
+        pool_size: String.to_integer(System.get_env("POOL_SIZE", "20")),
         socket_options: if(System.get_env("FLY_APP_NAME"), do: [:inet6], else: [])
 end
 

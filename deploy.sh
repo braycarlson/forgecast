@@ -177,8 +177,21 @@ step_set_secrets() {
 
     secrets_args=()
 
-    # Secrets already defined in fly.toml [env] — skip these.
+    # Secrets already defined in fly.toml [env] — skip these
+    # and unset them if they were previously set as secrets.
     skip_keys="POLLER MIX_ENV PORT GITHUB_OAUTH_REDIRECT_URI"
+
+    unset_args=()
+    for sk in $skip_keys; do
+        if fly secrets list --app "$APP_NAME" 2>/dev/null | grep -qw "$sk"; then
+            unset_args+=("$sk")
+        fi
+    done
+
+    if [ ${#unset_args[@]} -gt 0 ]; then
+        yellow "  Unsetting secrets managed by fly.toml: ${unset_args[*]}"
+        fly secrets unset --app "$APP_NAME" "${unset_args[@]}"
+    fi
 
     while IFS= read -r line || [ -n "$line" ]; do
         # Skip empty lines and comments
