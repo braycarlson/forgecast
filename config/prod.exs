@@ -1,4 +1,4 @@
 import Config
 
 config :forgecast, Forgecast.Repo,
-    pool_size: 15
+    pool_size: 10
