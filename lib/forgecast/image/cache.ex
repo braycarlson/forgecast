@@ -130,17 +130,6 @@ defmodule Forgecast.Image.Cache do
         end
     end
 
-    @spec needs_refresh?(Repository.t()) :: boolean()
-    def needs_refresh?(%Repository{og_image_url: nil}), do: false
-    def needs_refresh?(%Repository{og_image_url: ""}), do: false
-    def needs_refresh?(%Repository{og_image_cached_at: nil}), do: true
-
-    def needs_refresh?(%Repository{} = repo) do
-        refresh_seconds = refresh_interval_seconds(repo.id)
-        cutoff = NaiveDateTime.add(NaiveDateTime.utc_now(), -refresh_seconds)
-        NaiveDateTime.compare(repo.og_image_cached_at, cutoff) == :lt
-    end
-
     @spec repos_needing_cache(non_neg_integer()) :: [Repository.t()]
     def repos_needing_cache(limit \\ 50) do
         # Use the max refresh interval as a broad filter, then
@@ -170,9 +159,12 @@ defmodule Forgecast.Image.Cache do
             )
             |> Repo.all()
 
-        (candidates ++ hot_candidates)
-        |> Enum.uniq_by(& &1.id)
-        |> Enum.filter(&needs_refresh?/1)
+        all = (candidates ++ hot_candidates) |> Enum.uniq_by(& &1.id)
+        repo_ids = Enum.map(all, & &1.id)
+        velocities = Velocity.star_velocities(repo_ids)
+
+        all
+        |> Enum.filter(fn repo -> needs_refresh_with_velocity?(repo, velocities) end)
         |> Enum.take(limit)
     end
 
@@ -189,7 +181,23 @@ defmodule Forgecast.Image.Cache do
     @spec refresh_interval_seconds(integer()) :: non_neg_integer()
     def refresh_interval_seconds(repo_id) do
         velocity = Velocity.star_velocity(repo_id)
+        velocity_to_refresh_interval(velocity)
+    end
 
+    # -- Private --
+
+    defp needs_refresh_with_velocity?(%Repository{og_image_url: nil}, _), do: false
+    defp needs_refresh_with_velocity?(%Repository{og_image_url: ""}, _), do: false
+    defp needs_refresh_with_velocity?(%Repository{og_image_cached_at: nil}, _), do: true
+
+    defp needs_refresh_with_velocity?(%Repository{} = repo, velocities) do
+        velocity = Map.get(velocities, repo.id, 0.0)
+        refresh_seconds = velocity_to_refresh_interval(velocity)
+        cutoff = NaiveDateTime.add(NaiveDateTime.utc_now(), -refresh_seconds)
+        NaiveDateTime.compare(repo.og_image_cached_at, cutoff) == :lt
+    end
+
+    defp velocity_to_refresh_interval(velocity) do
         cond do
             # >10 stars/hour: refresh every 6 hours
             velocity > 10.0 -> @min_refresh_hours * 3600
@@ -203,8 +211,6 @@ defmodule Forgecast.Image.Cache do
             true -> @max_refresh_days * 86_400
         end
     end
-
-    # -- Private --
 
     @spec dormant?(integer()) :: boolean()
     defp dormant?(repo_id) do

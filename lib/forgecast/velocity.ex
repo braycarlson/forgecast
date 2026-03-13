@@ -6,32 +6,55 @@ defmodule Forgecast.Velocity do
     """
 
     alias Forgecast.Repo
-    alias Forgecast.Schema.Snapshot
-
-    import Ecto.Query
 
     @spec star_velocity(integer()) :: float()
     def star_velocity(repo_id) do
-        snapshots =
-            from(s in Snapshot,
-                where: s.repo_id == ^repo_id,
-                order_by: [desc: s.inserted_at],
-                limit: 2
-            )
-            |> Repo.all()
+        case star_velocities([repo_id]) do
+            %{^repo_id => v} -> v
+            _ -> 0.0
+        end
+    end
 
-        case snapshots do
-            [latest, previous] ->
-                hours =
-                    NaiveDateTime.diff(latest.inserted_at, previous.inserted_at, :second)
-                    / 3600.0
+    @spec star_velocities([integer()]) :: %{integer() => float()}
+    def star_velocities([]), do: %{}
 
-                if hours > 0,
-                    do: (latest.stars - previous.stars) / hours,
-                    else: 0.0
+    def star_velocities(repo_ids) do
+        sql = """
+        SELECT r.id, s.stars, EXTRACT(EPOCH FROM s.inserted_at)::float8 AS ts
+        FROM unnest($1::bigint[]) AS r(id)
+        CROSS JOIN LATERAL (
+            SELECT s.stars, s.inserted_at
+            FROM snapshots s
+            WHERE s.repo_id = r.id
+            ORDER BY s.inserted_at DESC
+            LIMIT 2
+        ) s
+        """
+
+        case Repo.query(sql, [repo_ids]) do
+            {:ok, %{rows: rows}} ->
+                rows
+                |> Enum.group_by(&Enum.at(&1, 0))
+                |> Enum.map(fn {repo_id, entries} ->
+                    case entries do
+                        [[_, latest_stars, latest_ts], [_, prev_stars, prev_ts]] ->
+                            hours = (latest_ts - prev_ts) / 3600.0
+
+                            velocity =
+                                if hours > 0,
+                                    do: (latest_stars - prev_stars) / hours,
+                                    else: 0.0
+
+                            {repo_id, velocity}
+
+                        _ ->
+                            {repo_id, 0.0}
+                    end
+                end)
+                |> Map.new()
 
             _ ->
-                0.0
+                Map.new(repo_ids, &{&1, 0.0})
         end
     end
 end

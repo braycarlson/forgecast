@@ -184,3 +184,50 @@ check:
     {{clear}}
     docker compose --profile dev exec app-dev bun run type-check
     docker compose --profile dev exec app-dev bun run lint
+
+# --- Fly.io ---
+
+# Full first-time setup: app + db + volume + secrets + deploy.
+fly-setup:
+    {{clear}}
+    bash deploy.sh setup
+
+# Deploy to Fly.io.
+fly-deploy:
+    {{clear}}
+    bash deploy.sh deploy
+
+# Create and attach the Fly Postgres + TimescaleDB database.
+fly-db:
+    {{clear}}
+    bash deploy.sh db
+
+# Generate deploy token for GitHub Actions auto-deploy.
+fly-ci:
+    {{clear}}
+    bash deploy.sh ci
+
+# Set Fly.io secrets from .env.
+fly-secrets:
+    {{clear}}
+    bash deploy.sh secrets
+
+# Run migrations on the deployed app.
+fly-migrate:
+    {{clear}}
+    bash deploy.sh migrate
+
+# Show Fly.io app, db, and volume status.
+fly-status:
+    {{clear}}
+    bash deploy.sh status
+
+# Open a remote IEx console on the deployed app.
+fly-console:
+    {{clear}}
+    bash deploy.sh console
+
+# Destroy the Fly.io app and database.
+fly-destroy:
+    {{clear}}
+    bash deploy.sh destroy

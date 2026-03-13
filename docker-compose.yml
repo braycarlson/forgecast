@@ -1,7 +1,7 @@
 services:
   db:
     container_name: forgecast-db
-    image: postgres:17-alpine
+    image: timescale/timescaledb:latest-pg17
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

@@ -1,8 +1,11 @@
 defmodule Forgecast.Application do
     @moduledoc """
     OTP application entry point. Starts the repo, HTTP server,
-    event stream poller, enricher, pruner, session pruner, and
-    platform pollers.
+    event stream poller, enricher, scoring worker, and platform
+    pollers.
+
+    Event pruning and snapshot retention are handled by TimescaleDB's
+    native retention policies, so no GenServer pruners are needed.
     """
 
     use Application
@@ -86,8 +89,8 @@ defmodule Forgecast.Application do
                 [
                     Forgecast.Event.Poller,
                     Forgecast.Event.Enricher,
-                    Forgecast.Event.Pruner,
                     Forgecast.Image.Worker,
+                    Forgecast.Scoring.Worker,
                     Forgecast.Auth.SessionPruner,
                     Forgecast.Poller.Registry,
                     Forgecast.Poller.Supervisor

@@ -13,25 +13,34 @@ defmodule Forgecast.Ingester do
     Snapshot delta thresholds scale with total stars: for repos with
     10k+ stars, a change of 5 is noise and gets suppressed. The
     threshold is max(5, 0.1% of total stars).
+
+    After upserting repos, precomputes cross-platform mirror links
+    for the affected canonical names so the trending read path
+    never needs to join across the full table.
+
+    Chunks large batches to stay within PostgreSQL's 65535 parameter
+    limit on prepared statements.
     """
 
     alias Forgecast.Repo
     alias Forgecast.Schema.{Repository, Snapshot}
     alias Forgecast.Platform.Result
 
-    import Ecto.Query
-
     @default_check_delay 3600
     @min_snapshot_interval_seconds 3600
     @min_snapshot_star_delta 5
     @snapshot_star_delta_ratio 0.001
+    @max_repo_batch 2000
+    @max_snapshot_batch 5000
 
     @spec ingest([Result.t()]) :: [{:ok, Repository.t()} | {:error, Ecto.Changeset.t()}]
     def ingest([]), do: []
 
     def ingest(results) do
-        now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
-        default_check = NaiveDateTime.add(now, @default_check_delay)
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+        now_naive = DateTime.to_naive(now)
+        now_epoch = DateTime.to_unix(now)
+        default_check = NaiveDateTime.add(now_naive, @default_check_delay)
 
         entries =
             Enum.map(results, fn result ->
@@ -49,23 +58,30 @@ defmodule Forgecast.Ingester do
                     stars: result.stars,
                     forks: result.forks,
                     open_issues: result.open_issues,
-                    last_seen_at: now,
+                    last_seen_at: now_naive,
                     next_check_at: default_check,
-                    inserted_at: now,
-                    updated_at: now
+                    inserted_at: now_naive,
+                    updated_at: now_naive
                 }
             end)
 
-        {_count, upserted} =
-            Repo.insert_all(Repository, entries,
-                on_conflict: {:replace, [
-                    :name, :owner, :description, :language, :url, :topics,
-                    :avatar_url, :og_image_url, :stars, :forks, :open_issues,
-                    :last_seen_at, :updated_at
-                ]},
-                conflict_target: [:platform, :platform_id],
-                returning: [:id, :platform, :platform_id]
-            )
+        upserted =
+            entries
+            |> Enum.chunk_every(@max_repo_batch)
+            |> Enum.flat_map(fn batch ->
+                {_count, rows} =
+                    Repo.insert_all(Repository, batch,
+                        on_conflict: {:replace, [
+                            :name, :owner, :description, :language, :url, :topics,
+                            :avatar_url, :og_image_url, :stars, :forks, :open_issues,
+                            :last_seen_at, :updated_at
+                        ]},
+                        conflict_target: [:platform, :platform_id],
+                        returning: [:id, :platform, :platform_id, :name, :owner]
+                    )
+
+                rows
+            end)
 
         repo_ids = Enum.map(upserted, & &1.id)
         latest_by_repo = fetch_latest_snapshots(repo_ids)
@@ -89,9 +105,9 @@ defmodule Forgecast.Ingester do
                             nil ->
                                 true
 
-                            {stars, forks, issues, recorded_at} ->
+                            {stars, forks, issues, recorded_epoch} ->
                                 changed? = stars != result.stars or forks != result.forks or issues != result.open_issues
-                                age = NaiveDateTime.diff(now, recorded_at, :second)
+                                age = now_epoch - trunc(recorded_epoch)
                                 star_delta = abs(result.stars - stars)
                                 min_delta = snapshot_delta_threshold(stars)
 
@@ -119,11 +135,27 @@ defmodule Forgecast.Ingester do
             end)
 
         if snapshot_entries != [] do
-            Repo.insert_all(Snapshot, snapshot_entries)
+            snapshot_entries
+            |> Enum.chunk_every(@max_snapshot_batch)
+            |> Enum.each(fn batch ->
+                Repo.insert_all(Snapshot, batch)
+            end)
+
             Forgecast.Trending.invalidate_cache()
         end
 
+        update_mirrors(upserted)
+
         Enum.map(upserted, fn repo -> {:ok, repo} end)
+    end
+
+    defp update_mirrors(upserted) do
+        canonicals =
+            upserted
+            |> Enum.map(fn repo -> Forgecast.Mirror.canonical(repo.owner, repo.name) end)
+            |> Enum.uniq()
+
+        Forgecast.Mirror.refresh_for_canonicals(canonicals)
     end
 
     defp snapshot_delta_threshold(stars) when is_integer(stars) do
@@ -136,22 +168,35 @@ defmodule Forgecast.Ingester do
     defp presence(""), do: nil
     defp presence(value), do: value
 
+    # Uses a LATERAL join to grab exactly one snapshot per repo via
+    # a single index seek on (repo_id, inserted_at DESC), avoiding
+    # the GROUP BY + self-join that scales poorly at millions of rows.
     defp fetch_latest_snapshots([]), do: %{}
 
     defp fetch_latest_snapshots(repo_ids) do
-        latest_ids =
-            from(s in Snapshot,
-                where: s.repo_id in ^repo_ids,
-                group_by: s.repo_id,
-                select: %{repo_id: s.repo_id, max_id: max(s.id)}
-            )
+        sql = """
+        SELECT r.id, s.stars, s.forks, s.open_issues,
+               EXTRACT(EPOCH FROM s.inserted_at)::float8 AS ts
+        FROM unnest($1::bigint[]) AS r(id)
+        CROSS JOIN LATERAL (
+            SELECT s.stars, s.forks, s.open_issues, s.inserted_at
+            FROM snapshots s
+            WHERE s.repo_id = r.id
+            ORDER BY s.inserted_at DESC
+            LIMIT 1
+        ) s
+        """
 
-        Repo.all(
-            from s in Snapshot,
-                join: l in subquery(latest_ids),
-                    on: s.id == l.max_id,
-                select: {s.repo_id, {s.stars, s.forks, s.open_issues, s.inserted_at}}
-        )
-        |> Map.new()
+        case Repo.query(sql, [repo_ids]) do
+            {:ok, %{rows: rows}} ->
+                rows
+                |> Enum.map(fn [repo_id, stars, forks, issues, ts] ->
+                    {repo_id, {stars, forks, issues, ts}}
+                end)
+                |> Map.new()
+
+            _ ->
+                %{}
+        end
     end
 end

@@ -38,9 +38,9 @@ defmodule Forgecast.Api.Router do
         platform = conn.query_params["platform"]
         language = conn.query_params["language"]
         search = conn.query_params["search"]
+        cursor = conn.query_params["cursor"]
         page = parse_int(conn.query_params["page"], 1) |> max(1)
         per_page = parse_int(conn.query_params["per_page"], 12) |> clamp(1, max_per_page)
-        window = parse_int(conn.query_params["window"], 24) |> clamp(1, 720)
         sort = parse_sort(conn.query_params["sort"])
         dir = parse_dir(conn.query_params["dir"])
 
@@ -48,9 +48,9 @@ defmodule Forgecast.Api.Router do
             platform: platform,
             language: language,
             search: search,
+            cursor: cursor,
             page: page,
             per_page: per_page,
-            window: window,
             sort: sort,
             dir: dir
         )
@@ -90,7 +90,8 @@ defmodule Forgecast.Api.Router do
     end
 
     get "/api/repos/:id/snapshots" do
-        snapshots = Forgecast.snapshots_for(id)
+        limit = parse_int(conn.query_params["limit"], 1000) |> clamp(1, 5000)
+        snapshots = Forgecast.snapshots_for(id, limit: limit)
         send_json(conn, 200, snapshots)
     end
 

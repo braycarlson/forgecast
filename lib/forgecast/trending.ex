@@ -1,18 +1,30 @@
 defmodule Forgecast.Trending do
     @moduledoc """
-    Queries repos and computes trending scores based on event-stream
-    velocity and snapshot deltas within a configurable time window.
-    Delegates pure scoring math to `Forgecast.Scoring`.
+    Serves trending data from precomputed scores stored on the
+    repos table. All filtering, sorting, and pagination happens
+    in Postgres using indexed columns, making queries O(log n)
+    regardless of table size.
+
+    Scores are maintained by `Forgecast.Scoring.Worker` on a
+    background schedule. This module only reads.
+
+    Supports keyset (cursor) pagination for efficient deep paging.
+    When a `cursor` is provided, OFFSET is bypassed entirely and
+    the query uses a row-value comparison against the indexed sort
+    column plus the ID tiebreaker. Falls back to OFFSET pagination
+    when no cursor is given for backward compatibility.
     """
 
     alias Forgecast.Repo
-    alias Forgecast.Schema.{Repository, Snapshot, Event}
-    alias Forgecast.Scoring
+    alias Forgecast.Schema.{Repository, Snapshot}
 
     import Ecto.Query
 
     @cache_table :forgecast_trending_cache
     @cache_ttl_ms 30_000
+    @filters_cache_key :__available_filters__
+    @filters_ttl_ms 300_000
+    @search_count_cap 10_000
 
     @spec init_cache() :: :ok
     def init_cache do
@@ -49,19 +61,15 @@ defmodule Forgecast.Trending do
 
     @spec available_filters() :: map()
     def available_filters do
-        platforms =
-            Repo.all(from r in Repository, distinct: true, select: r.platform, order_by: r.platform)
+        case lookup_cache(@filters_cache_key) do
+            {:ok, result} ->
+                result
 
-        languages =
-            Repo.all(
-                from r in Repository,
-                    where: not is_nil(r.language) and r.language != "",
-                    distinct: true,
-                    select: r.language,
-                    order_by: r.language
-            )
-
-        %{platforms: platforms, languages: languages}
+            :miss ->
+                result = fetch_available_filters()
+                store_cache(@filters_cache_key, result, @filters_ttl_ms)
+                result
+        end
     end
 
     @spec list_repos(keyword()) :: [map()]
@@ -71,6 +79,7 @@ defmodule Forgecast.Trending do
 
         query =
             from r in Repository,
+                where: r.active == true,
                 select: %{
                     id: r.id,
                     platform: r.platform,
@@ -95,12 +104,15 @@ defmodule Forgecast.Trending do
         Repo.all(query)
     end
 
-    @spec snapshots_for(integer() | binary()) :: [map()]
-    def snapshots_for(repo_id) do
+    @spec snapshots_for(integer() | binary(), keyword()) :: [map()]
+    def snapshots_for(repo_id, opts \\ []) do
+        limit = Keyword.get(opts, :limit, 1000)
+
         Repo.all(
             from s in Snapshot,
                 where: s.repo_id == ^repo_id,
                 order_by: [asc: s.inserted_at],
+                limit: ^limit,
                 select: %{
                     stars: s.stars,
                     forks: s.forks,
@@ -113,13 +125,36 @@ defmodule Forgecast.Trending do
     @spec status() :: map()
     def status do
         %{
-            repos: Repo.aggregate(Repository, :count),
-            snapshots: Repo.aggregate(Snapshot, :count),
-            events: Repo.aggregate(Event, :count)
+            repos: estimated_count("repos"),
+            snapshots: estimated_count("snapshots"),
+            events: estimated_count("events")
         }
     end
 
     # -- Private --
+
+    defp estimated_count(table) do
+        case Repo.query("SELECT estimated_row_count($1)", [table]) do
+            {:ok, %{rows: [[count]]}} -> count
+            _ -> 0
+        end
+    end
+
+    defp fetch_available_filters do
+        platforms =
+            Repo.all(from r in Repository, distinct: true, select: r.platform, order_by: r.platform)
+
+        languages =
+            Repo.all(
+                from r in Repository,
+                    where: not is_nil(r.language) and r.language != "",
+                    distinct: true,
+                    select: r.language,
+                    order_by: r.language
+            )
+
+        %{platforms: platforms, languages: languages}
+    end
 
     defp lookup_cache(key) do
         if :ets.whereis(@cache_table) == :undefined do
@@ -140,44 +175,50 @@ defmodule Forgecast.Trending do
         end
     end
 
-    defp store_cache(key, result) do
+    defp store_cache(key, result, ttl \\ @cache_ttl_ms) do
         if :ets.whereis(@cache_table) != :undefined do
-            expires_at = System.monotonic_time(:millisecond) + @cache_ttl_ms
+            expires_at = System.monotonic_time(:millisecond) + ttl
             :ets.insert(@cache_table, {key, result, expires_at})
         end
     end
 
     defp compute_score(opts) do
-        stale_days = Application.get_env(:forgecast, :trending)[:stale_days] || 7
-
         platform = Keyword.get(opts, :platform)
         language = Keyword.get(opts, :language)
         search = Keyword.get(opts, :search)
+        cursor = Keyword.get(opts, :cursor)
         page = Keyword.get(opts, :page, 1)
         per_page = Keyword.get(opts, :per_page, 12)
-        window_hours = Keyword.get(opts, :window, 24)
         sort = Keyword.get(opts, :sort)
         dir = Keyword.get(opts, :dir)
 
-        cutoff = NaiveDateTime.add(NaiveDateTime.utc_now(), -window_hours * 3600)
-        stale_cutoff = NaiveDateTime.add(NaiveDateTime.utc_now(), -stale_days * 86400)
-        offset = (page - 1) * per_page
+        filtered? = not is_nil(platform) or not is_nil(language)
+        searching? = is_binary(search) and search != ""
 
-        base = base_repo_query(platform, language, search, stale_cutoff)
-        event_counts = event_counts_query(cutoff)
+        base = base_query(platform, language, search)
+        total = count_results(base, searching?, filtered?)
+        {sort_field, sort_dir} = resolve_sort(sort, dir)
+        decoded_cursor = decode_cursor(cursor)
 
-        total =
+        items_query =
             base
-            |> select([r], count(r.id))
-            |> Repo.one()
+            |> apply_cursor(decoded_cursor, sort_field, sort_dir)
+            |> apply_sort_with_tiebreaker(sort_field, sort_dir)
 
-        scored =
-            base
-            |> join(:left, [r], first in subquery(window_boundary_query(cutoff, :asc)), on: first.repo_id == r.id)
-            |> join(:left, [r, _], last in subquery(window_boundary_query(cutoff, :desc)), on: last.repo_id == r.id)
-            |> join(:left, [r, _, _], ec in subquery(event_counts),
-                on: ec.platform == r.platform and ec.platform_repo_id == r.platform_id)
-            |> select([r, first, last, ec], %{
+        items_query =
+            if decoded_cursor do
+                limit(items_query, ^(per_page + 1))
+            else
+                offset = (page - 1) * per_page
+
+                items_query
+                |> offset(^offset)
+                |> limit(^(per_page + 1))
+            end
+
+        items =
+            items_query
+            |> select([r], %{
                 id: r.id,
                 platform: r.platform,
                 name: r.name,
@@ -189,35 +230,27 @@ defmodule Forgecast.Trending do
                 avatar_url: r.avatar_url,
                 og_image_url: r.og_image_url,
                 og_image_cached: not is_nil(r.og_image_cached_at),
-                inserted_at: r.inserted_at,
                 stars: r.stars,
                 forks: r.forks,
                 open_issues: r.open_issues,
-                first_stars: first.stars,
-                last_stars: last.stars,
-                first_forks: first.forks,
-                last_forks: last.forks,
-                first_at: first.inserted_at,
-                last_at: last.inserted_at,
-                event_stars: coalesce(ec.star_count, 0),
-                event_forks: coalesce(ec.fork_count, 0)
+                score: r.score,
+                star_velocity: r.star_velocity,
+                fork_velocity: r.fork_velocity,
+                mirrors: r.mirrors
             })
             |> Repo.all()
-            |> Enum.map(&Scoring.attach_scores(&1, window_hours))
-            |> Scoring.sort(sort, dir)
 
-        items =
-            scored
-            |> Enum.drop(offset)
-            |> Enum.take(per_page)
+        has_more = length(items) > per_page
+        items = Enum.take(items, per_page)
 
-        mirrors = Forgecast.Mirror.for_repos(items)
+        next_cursor =
+            if has_more and items != [] do
+                encode_cursor(List.last(items), sort_field)
+            end
 
         items =
             Enum.map(items, fn item ->
-                item
-                |> Map.put(:mirrors, Map.get(mirrors, item.id, []))
-                |> Map.put(:og_image_url, if(item.og_image_cached, do: "/api/og-image/#{item.id}", else: nil))
+                Map.put(item, :og_image_url, if(item.og_image_cached, do: "/api/og-image/#{item.id}", else: nil))
             end)
 
         %{
@@ -225,44 +258,18 @@ defmodule Forgecast.Trending do
             total: total,
             page: page,
             per_page: per_page,
-            total_pages: max(ceil(total / per_page), 1)
+            total_pages: max(ceil(total / per_page), 1),
+            next_cursor: next_cursor,
+            has_more: has_more
         }
     end
 
-    defp event_counts_query(cutoff) do
-        from(e in Event,
-            where: e.occurred_at >= ^cutoff,
-            group_by: [e.platform, e.platform_repo_id],
-            select: %{
-                platform: e.platform,
-                platform_repo_id: e.platform_repo_id,
-                star_count: filter(count(e.id), e.event_type == "star"),
-                fork_count: filter(count(e.id), e.event_type == "fork")
-            }
-        )
-    end
-
-    defp base_repo_query(platform, language, search, stale_cutoff) do
-        query =
-            from(r in Repository,
-                where: is_nil(r.last_seen_at) or r.last_seen_at >= ^stale_cutoff
-            )
+    defp base_query(platform, language, search) do
+        query = from(r in Repository, where: r.active == true)
 
         query = apply_filter(query, :platform, platform)
         query = apply_filter(query, :language, language)
-
-        if search && search != "" do
-            term = "%#{sanitize_like(search)}%" |> String.downcase()
-
-            where(query, [r],
-                fragment("lower(?) LIKE ? ESCAPE '~'", r.name, ^term) or
-                fragment("lower(?) LIKE ? ESCAPE '~'", r.description, ^term) or
-                fragment("lower(?) LIKE ? ESCAPE '~'", r.language, ^term) or
-                fragment("EXISTS (SELECT 1 FROM unnest(?) t WHERE lower(t) LIKE ? ESCAPE '~')", r.topics, ^term)
-            )
-        else
-            query
-        end
+        apply_search(query, search)
     end
 
     defp apply_filter(query, _field, nil), do: query
@@ -282,39 +289,121 @@ defmodule Forgecast.Trending do
         end
     end
 
-    defp window_boundary_query(cutoff, :asc) do
-        inner =
-            from s in Snapshot,
-                where: s.inserted_at >= ^cutoff,
-                group_by: s.repo_id,
-                select: %{repo_id: s.repo_id, boundary_id: min(s.id)}
+    defp apply_search(query, nil), do: query
+    defp apply_search(query, ""), do: query
 
-        from s in Snapshot,
-            join: b in subquery(inner), on: s.id == b.boundary_id,
-            select: %{
-                repo_id: s.repo_id,
-                stars: s.stars,
-                forks: s.forks,
-                inserted_at: s.inserted_at
-            }
+    defp apply_search(query, search) do
+        term = String.downcase(search)
+        like_term = "%#{sanitize_like(term)}%"
+
+        where(query, [r],
+            fragment(
+                "(lower(?) || ' ' || coalesce(lower(?), '') || ' ' || coalesce(lower(?), '')) LIKE ? ESCAPE '~'",
+                r.name, r.description, r.language, ^like_term
+            ) or
+            fragment(
+                "EXISTS (SELECT 1 FROM unnest(?) t WHERE lower(t) LIKE ? ESCAPE '~')",
+                r.topics, ^like_term
+            )
+        )
     end
 
-    defp window_boundary_query(cutoff, :desc) do
-        inner =
-            from s in Snapshot,
-                where: s.inserted_at >= ^cutoff,
-                group_by: s.repo_id,
-                select: %{repo_id: s.repo_id, boundary_id: max(s.id)}
+    # -- Sorting --
 
-        from s in Snapshot,
-            join: b in subquery(inner), on: s.id == b.boundary_id,
-            select: %{
-                repo_id: s.repo_id,
-                stars: s.stars,
-                forks: s.forks,
-                inserted_at: s.inserted_at
-            }
+    defp resolve_sort(nil, _), do: {:score, :desc}
+    defp resolve_sort(:score, nil), do: {:score, :desc}
+    defp resolve_sort(:score, dir), do: {:score, dir}
+    defp resolve_sort(:stars, nil), do: {:stars, :desc}
+    defp resolve_sort(:stars, dir), do: {:stars, dir}
+    defp resolve_sort(:forks, nil), do: {:forks, :desc}
+    defp resolve_sort(:forks, dir), do: {:forks, dir}
+    defp resolve_sort(:star_velocity, nil), do: {:star_velocity, :desc}
+    defp resolve_sort(:star_velocity, dir), do: {:star_velocity, dir}
+    defp resolve_sort(:name, nil), do: {:name, :asc}
+    defp resolve_sort(:name, dir), do: {:name, dir}
+    defp resolve_sort(:language, nil), do: {:language, :asc}
+    defp resolve_sort(:language, dir), do: {:language, dir}
+    defp resolve_sort(_, _), do: {:score, :desc}
+
+    defp apply_sort_with_tiebreaker(query, field, :desc) do
+        order_by(query, [r], [{:desc, field(r, ^field)}, {:desc, r.id}])
     end
+
+    defp apply_sort_with_tiebreaker(query, field, :asc) do
+        order_by(query, [r], [{:asc, field(r, ^field)}, {:asc, r.id}])
+    end
+
+    # -- Cursor pagination --
+
+    defp apply_cursor(query, nil, _field, _dir), do: query
+
+    defp apply_cursor(query, {cursor_value, cursor_id}, field, :desc) do
+        where(query, [r],
+            fragment("(?, ?) < (?, ?)",
+                field(r, ^field), r.id,
+                ^cursor_value, ^cursor_id
+            )
+        )
+    end
+
+    defp apply_cursor(query, {cursor_value, cursor_id}, field, :asc) do
+        where(query, [r],
+            fragment("(?, ?) > (?, ?)",
+                field(r, ^field), r.id,
+                ^cursor_value, ^cursor_id
+            )
+        )
+    end
+
+    defp encode_cursor(item, sort_field) do
+        %{v: Map.get(item, sort_field), id: item.id}
+        |> Jason.encode!()
+        |> Base.url_encode64(padding: false)
+    end
+
+    defp decode_cursor(nil), do: nil
+    defp decode_cursor(""), do: nil
+
+    defp decode_cursor(encoded) do
+        with {:ok, json} <- Base.url_decode64(encoded, padding: false),
+             {:ok, %{"v" => value, "id" => id}} <- Jason.decode(json) do
+            {value, id}
+        else
+            _ -> nil
+        end
+    end
+
+    # -- Counting --
+
+    # Active search: use a bounded count to cap scan cost.
+    defp count_results(query, true = _searching?, _filtered?) do
+        bounded =
+            from(sub in subquery(from(r in query, select: r.id, limit: ^(@search_count_cap + 1))),
+                select: count()
+            )
+
+        min(Repo.one(bounded), @search_count_cap)
+    end
+
+    # No search, but filtered by platform/language: exact count
+    # is cheap on the partial indexes covering those columns.
+    defp count_results(query, false, true = _filtered?) do
+        Repo.one(from(r in query, select: count(r.id)))
+    end
+
+    # Unfiltered, no search: use pg_class estimate to avoid a
+    # full index scan on millions of active rows.
+    defp count_results(_query, false, false) do
+        case Repo.query(
+            "SELECT GREATEST(reltuples::bigint, 0) FROM pg_class WHERE relname = 'repos'",
+            []
+        ) do
+            {:ok, %{rows: [[count]]}} -> count
+            _ -> 0
+        end
+    end
+
+    # -- Helpers --
 
     defp split_filter(value) do
         value

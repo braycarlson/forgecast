@@ -148,8 +148,8 @@ defmodule Forgecast.Event.Poller do
             end)
 
         relevant = Enum.reverse(relevant)
-        insert_events(relevant)
         repo_count = ensure_skeleton_repos(relevant)
+        insert_events_with_repo_ids(relevant)
 
         {length(relevant), repo_count, new_seen}
     end
@@ -186,7 +186,7 @@ defmodule Forgecast.Event.Poller do
                 repo_name: repo_name,
                 owner: owner,
                 event_type: event_type,
-                occurred_at: DateTime.to_naive(occurred_at)
+                occurred_at: DateTime.truncate(occurred_at, :second)
             }
         else
             _ -> nil
@@ -195,14 +195,26 @@ defmodule Forgecast.Event.Poller do
 
     defp parse_event(_), do: nil
 
-    defp insert_events([]), do: :ok
+    defp insert_events_with_repo_ids([]), do: :ok
 
-    defp insert_events(events) do
+    defp insert_events_with_repo_ids(events) do
+        # Resolve platform_repo_id -> repo.id for the integer FK
+        platform_ids = Enum.map(events, & &1.platform_repo_id) |> Enum.uniq()
+
+        repo_id_map =
+            from(r in Repository,
+                where: r.platform == "github" and r.platform_id in ^platform_ids,
+                select: {r.platform_id, r.id}
+            )
+            |> Repo.all()
+            |> Map.new()
+
         entries =
             Enum.map(events, fn e ->
                 %{
                     platform: e.platform,
                     platform_repo_id: e.platform_repo_id,
+                    repo_id: Map.get(repo_id_map, e.platform_repo_id),
                     repo_name: e.repo_name,
                     event_type: e.event_type,
                     occurred_at: e.occurred_at
@@ -217,20 +229,9 @@ defmodule Forgecast.Event.Poller do
     defp ensure_skeleton_repos(events) do
         now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
 
-        unique_events = Enum.uniq_by(events, & &1.platform_repo_id)
-        platform_ids = Enum.map(unique_events, & &1.platform_repo_id)
-
-        existing =
-            from(r in Repository,
-                where: r.platform == "github" and r.platform_id in ^platform_ids,
-                select: r.platform_id
-            )
-            |> Repo.all()
-            |> MapSet.new()
-
         entries =
-            unique_events
-            |> Enum.reject(fn e -> MapSet.member?(existing, e.platform_repo_id) end)
+            events
+            |> Enum.uniq_by(& &1.platform_repo_id)
             |> Enum.map(fn e ->
                 %{
                     platform: e.platform,
@@ -247,19 +248,13 @@ defmodule Forgecast.Event.Poller do
                 }
             end)
 
-        case entries do
-            [] ->
-                0
+        {count, _} =
+            Repo.insert_all(Repository, entries,
+                on_conflict: :nothing,
+                conflict_target: [:platform, :platform_id]
+            )
 
-            _ ->
-                {count, _} =
-                    Repo.insert_all(Repository, entries,
-                        on_conflict: :nothing,
-                        conflict_target: [:platform, :platform_id]
-                    )
-
-                count
-        end
+        count
     end
 
     defp parse_poll_interval(headers) do

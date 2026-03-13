@@ -28,7 +28,7 @@ defmodule Forgecast.Schema.Preferences do
 
     schema "preferences" do
         field :key, :string
-        field :value, :map
+        field :value, Forgecast.Schema.Jsonb
 
         belongs_to :user, Forgecast.Schema.User
 

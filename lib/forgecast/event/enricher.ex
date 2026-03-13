@@ -32,6 +32,7 @@ defmodule Forgecast.Event.Enricher do
     @batch_size 40
     @min_events 2
     @graphql_url "https://api.github.com/graphql"
+    @event_lookback_days 7
 
     @type t :: %__MODULE__{
         total_enriched: non_neg_integer(),
@@ -179,7 +180,7 @@ defmodule Forgecast.Event.Enricher do
     end
 
     defp apply_batch_results(repos, data) do
-        now = NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
 
         repos
         |> Enum.with_index()
@@ -221,6 +222,7 @@ defmodule Forgecast.Event.Enricher do
             end
 
         star_velocity = compute_stargazer_velocity(body)
+        now_naive = DateTime.to_naive(now)
 
         attrs = %{
             description: body["description"],
@@ -231,9 +233,9 @@ defmodule Forgecast.Event.Enricher do
             stars: stars,
             forks: forks,
             open_issues: open_issues,
-            last_seen_at: now,
-            enriched_at: now,
-            next_check_at: NaiveDateTime.add(now, enrichment_check_interval(star_velocity))
+            last_seen_at: now_naive,
+            enriched_at: now_naive,
+            next_check_at: NaiveDateTime.add(now_naive, enrichment_check_interval(star_velocity))
         }
 
         repo
@@ -299,17 +301,25 @@ defmodule Forgecast.Event.Enricher do
     end
 
     defp pick_candidates(limit) do
+        # Only look at events from the last @event_lookback_days to
+        # avoid scanning compressed chunks in the events hypertable.
+        event_cutoff =
+            NaiveDateTime.utc_now()
+            |> NaiveDateTime.add(-@event_lookback_days * 86_400)
+
+        # Uses the integer repo_id FK for an efficient join
         event_counts =
             from(e in Event,
-                where: e.platform == "github",
-                group_by: e.platform_repo_id,
+                where: e.platform == "github" and not is_nil(e.repo_id),
+                where: e.occurred_at >= ^event_cutoff,
+                group_by: e.repo_id,
                 having: count(e.id) >= ^@min_events,
-                select: %{platform_repo_id: e.platform_repo_id, count: count(e.id)}
+                select: %{repo_id: e.repo_id, count: count(e.id)}
             )
 
         from(r in Repository,
             join: ec in subquery(event_counts),
-                on: r.platform_id == ec.platform_repo_id and r.platform == "github",
+                on: r.id == ec.repo_id,
             where: is_nil(r.enriched_at),
             order_by: [desc: ec.count],
             limit: ^limit
