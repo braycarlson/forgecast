@@ -38,7 +38,7 @@ defmodule Forgecast.Poller.Strategy do
     def profiles do
         %{
             discovery: %{
-                discovery_ratio: %{initial: 0.95, normal: 0.7, mature: 0.5},
+                discovery_ratio: %{initial: 0.95, normal: 0.95, mature: 0.95},
                 strategies: [
                     %__MODULE__{type: :top_starred, min_stars: 5, date_range: 180, page_limit: 10, cooldown_ms: 600_000},
                     %__MODULE__{type: :recently_created, min_stars: 1, date_range: 14, page_limit: 10, cooldown_ms: 300_000},

@@ -106,6 +106,7 @@ step_create_db() {
             --image-ref "$DB_IMAGE" \
             --region "$REGION" \
             --vm-size shared-cpu-1x \
+            --vm-memory 1024 \
             --initial-cluster-size 1 \
             --volume-size "$DB_VOLUME_SIZE_GB"
 
