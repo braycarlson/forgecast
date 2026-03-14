@@ -39,12 +39,14 @@ function onSelect(key: string, defaultDesc: boolean) {
 <template>
     <Popover :open="open" @update:open="open = $event">
         <PopoverTrigger as-child>
-            <Button variant="outline" class="gap-2">
-                <ArrowUpDown class="h-4 w-4" />
-                <span class="hidden sm:inline">Sort</span>
+            <Button variant="outline" class="w-full justify-between gap-2">
+                <span class="flex items-center gap-2">
+                    <ArrowUpDown class="h-4 w-4" />
+                    <span>Sort</span>
+                </span>
             </Button>
         </PopoverTrigger>
-        <PopoverContent class="z-50 w-[180px] bg-popover p-1" align="end">
+        <PopoverContent class="z-50 w-(--reka-popover-trigger-width) bg-popover p-1" align="start">
             <button
                 v-for="option in options"
                 :key="option.key"

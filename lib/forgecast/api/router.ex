@@ -30,7 +30,7 @@ defmodule Forgecast.Api.Router do
         CORSPlug.call(conn, opts)
     end
 
-    @allowed_sort ~w(stars forks star_velocity name language score)
+    @allowed_sort ~w(stars forks star_velocity name language score platform)
 
     # -- Public endpoints --
 

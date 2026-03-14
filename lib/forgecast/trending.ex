@@ -325,6 +325,8 @@ defmodule Forgecast.Trending do
     defp resolve_sort(:name, dir), do: {:name, dir}
     defp resolve_sort(:language, nil), do: {:language, :asc}
     defp resolve_sort(:language, dir), do: {:language, dir}
+    defp resolve_sort(:platform, nil), do: {:platform, :asc}
+    defp resolve_sort(:platform, dir), do: {:platform, dir}
     defp resolve_sort(_, _), do: {:score, :desc}
 
     defp apply_sort_with_tiebreaker(query, field, :desc) do
