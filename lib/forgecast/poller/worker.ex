@@ -259,7 +259,7 @@ defmodule Forgecast.Poller.Worker do
 
                     ref =
                         Task.Supervisor.async_nolink(Forgecast.TaskSupervisor, fn ->
-                            {:discover, state.module.search(language, strategy: strategy), page_key, page, strategy}
+                            {:discover, state.module.search(language, strategy: strategy, page: page), page_key, page, strategy}
                         end)
 
                     {:noreply, %{state | task_ref: ref.ref}}
