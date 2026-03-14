@@ -68,6 +68,11 @@ db-reset:
     {{clear}}
     mix ecto.reset
 
+# Seed the database with fake repos (default: 1,000,000).
+seed count="1000000":
+    {{clear}}
+    mix run priv/repo/seed.exs -- {{count}}
+
 # --- Testing ---
 
 # Run the full test suite.

@@ -5,6 +5,7 @@
 # Prerequisites:
 #   - flyctl installed and authenticated (fly auth login)
 #   - Docker running (for the build step)
+#   - CF_API_TOKEN and CF_ZONE_ID set in .env for Cloudflare DNS
 #
 # Usage:
 #   ./deploy.sh setup    — full first-time setup (app + db + volume + secrets + deploy)
@@ -13,7 +14,7 @@
 #   ./deploy.sh secrets  — set secrets from .env interactively
 #   ./deploy.sh migrate  — run migrations on the deployed app
 #   ./deploy.sh ci       — generate deploy token for GitHub Actions
-#   ./deploy.sh domain   — add custom domain and show DNS records
+#   ./deploy.sh domain   — allocate IPs, set Cloudflare DNS, and add Fly certs
 #   ./deploy.sh status   — show app, db, and volume status
 #   ./deploy.sh console  — open a remote IEx console
 #   ./deploy.sh destroy  — tear everything down (asks for confirmation)
@@ -52,6 +53,10 @@ DB_VOLUME_SIZE_GB=10
 DOMAIN="forgecast.io"
 ENV_FILE=".env"
 
+# Cloudflare — loaded from .env or environment.
+CF_API_TOKEN="${CF_API_TOKEN:-}"
+CF_ZONE_ID="${CF_ZONE_ID:-}"
+
 # ---------------------------------------------------------------
 # Colors
 # ---------------------------------------------------------------
@@ -75,6 +80,88 @@ db_exists() {
 
 volume_exists() {
     fly volumes list --app "$APP_NAME" --json 2>/dev/null | grep -q "\"${VOLUME_NAME}\""
+}
+
+# ---------------------------------------------------------------
+# Cloudflare helpers
+# ---------------------------------------------------------------
+
+cf_load_env() {
+    if [ -z "$CF_API_TOKEN" ] || [ -z "$CF_ZONE_ID" ]; then
+        if [ -f "$ENV_FILE" ]; then
+            CF_API_TOKEN="${CF_API_TOKEN:-$(grep -E '^CF_API_TOKEN=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed "s/^['\"]//;s/['\"]$//" || true)}"
+            CF_ZONE_ID="${CF_ZONE_ID:-$(grep -E '^CF_ZONE_ID=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed "s/^['\"]//;s/['\"]$//" || true)}"
+        fi
+    fi
+
+    if [ -z "$CF_API_TOKEN" ] || [ -z "$CF_ZONE_ID" ]; then
+        red "  CF_API_TOKEN and CF_ZONE_ID are required."
+        red "  Set them in $ENV_FILE or export them."
+        return 1
+    fi
+}
+
+cf_api() {
+    local method="$1"
+    local endpoint="$2"
+    local data="${3:-}"
+
+    local args=(
+        -s -X "$method"
+        -H "Authorization: Bearer $CF_API_TOKEN"
+        -H "Content-Type: application/json"
+    )
+
+    if [ -n "$data" ]; then
+        args+=(-d "$data")
+    fi
+
+    curl "${args[@]}" "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}${endpoint}"
+}
+
+cf_find_record() {
+    local type="$1"
+    local name="$2"
+
+    cf_api GET "/dns_records?type=${type}&name=${name}" \
+        | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4
+}
+
+cf_upsert_record() {
+    local type="$1"
+    local name="$2"
+    local content="$3"
+    local proxied="${4:-false}"
+
+    local payload
+    payload=$(cat <<EOF
+{"type":"${type}","name":"${name}","content":"${content}","proxied":${proxied},"ttl":1}
+EOF
+    )
+
+    local existing_id
+    existing_id=$(cf_find_record "$type" "$name")
+
+    if [ -n "$existing_id" ]; then
+        cf_api PATCH "/dns_records/${existing_id}" "$payload" > /dev/null
+        green "  Updated ${type} record: ${name} -> ${content}"
+    else
+        cf_api POST "/dns_records" "$payload" > /dev/null
+        green "  Created ${type} record: ${name} -> ${content}"
+    fi
+}
+
+cf_delete_record() {
+    local type="$1"
+    local name="$2"
+
+    local existing_id
+    existing_id=$(cf_find_record "$type" "$name")
+
+    if [ -n "$existing_id" ]; then
+        cf_api DELETE "/dns_records/${existing_id}" > /dev/null
+        green "  Deleted ${type} record: ${name}"
+    fi
 }
 
 # ---------------------------------------------------------------
@@ -180,7 +267,7 @@ step_set_secrets() {
 
     # Secrets already defined in fly.toml [env] — skip these
     # and unset them if they were previously set as secrets.
-    skip_keys="POLLER MIX_ENV PORT GITHUB_OAUTH_REDIRECT_URI"
+    skip_keys="POLLER MIX_ENV PORT GITHUB_OAUTH_REDIRECT_URI CF_API_TOKEN CF_ZONE_ID"
 
     unset_args=()
     for sk in $skip_keys; do
@@ -208,6 +295,9 @@ step_set_secrets() {
             key="$line"
             value=""
         fi
+
+        # CF_ vars are for the deploy script, not Fly secrets.
+        [[ "$key" == CF_API_TOKEN || "$key" == CF_ZONE_ID ]] && continue
 
         if [ -z "$value" ]; then
             existing=$(fly secrets list --app "$APP_NAME" 2>/dev/null | grep "$key" || true)
@@ -288,12 +378,54 @@ step_domain() {
     bold "Custom domain setup"
     echo
 
+    cf_load_env || return
+
+    # Allocate IPs if not already present.
+    bold "  Allocating IPs..."
+
+    local ip_json
+    ip_json=$(fly ips list --app "$APP_NAME" --json 2>/dev/null)
+
+    local ipv4
+    ipv4=$(echo "$ip_json" | grep -o '"Address":"[^"]*"' | grep -v ':' | head -1 | cut -d'"' -f4)
+
+    local ipv6
+    ipv6=$(echo "$ip_json" | grep -o '"Address":"[^"]*"' | grep ':' | head -1 | cut -d'"' -f4)
+
+    if [ -z "$ipv4" ]; then
+        fly ips allocate-v4 --app "$APP_NAME" --yes
+        ipv4=$(fly ips list --app "$APP_NAME" --json 2>/dev/null \
+            | grep -o '"Address":"[^"]*"' | grep -v ':' | head -1 | cut -d'"' -f4)
+    fi
+
+    if [ -z "$ipv6" ]; then
+        fly ips allocate-v6 --app "$APP_NAME"
+        ipv6=$(fly ips list --app "$APP_NAME" --json 2>/dev/null \
+            | grep -o '"Address":"[^"]*"' | grep ':' | head -1 | cut -d'"' -f4)
+    fi
+
+    green "  IPv4: $ipv4"
+    green "  IPv6: $ipv6"
+    echo
+
+    # Set Cloudflare DNS records (not proxied — Fly handles SSL).
+    bold "  Configuring Cloudflare DNS..."
+
+    cf_upsert_record "A"    "$DOMAIN"       "$ipv4" false
+    cf_upsert_record "AAAA" "$DOMAIN"       "$ipv6" false
+    cf_upsert_record "CNAME" "www.${DOMAIN}" "$DOMAIN" false
+
+    echo
+
+    # Add certs in Fly.
+    bold "  Requesting Fly TLS certificates..."
+
     fly certs add "$DOMAIN" --app "$APP_NAME" 2>&1 || true
     fly certs add "www.${DOMAIN}" --app "$APP_NAME" 2>&1 || true
 
     echo
-    green "  Certificates requested for $DOMAIN and www.${DOMAIN}."
-    yellow "  Fly handles SSL automatically once DNS is pointing here."
+    green "  DNS and certificates configured."
+    yellow "  Fly will issue SSL automatically once DNS propagates."
     echo
     fly certs list --app "$APP_NAME" 2>/dev/null || true
     echo
@@ -302,6 +434,12 @@ step_domain() {
 step_ci() {
     bold "GitHub Actions — Auto-deploy setup"
     echo
+
+    if ! command -v gh &>/dev/null; then
+        red "  Error: gh (GitHub CLI) not found. Install it from https://cli.github.com"
+        echo
+        return
+    fi
 
     if [ ! -d ".github/workflows" ]; then
         yellow "  No .github/workflows directory found."
@@ -328,17 +466,13 @@ step_ci() {
         return
     fi
 
+    green "  Token generated."
     echo
-    green "  Token generated. Add it to your GitHub repo:"
-    echo
-    yellow "  1. Go to: https://github.com/<you>/<repo>/settings/secrets/actions"
-    yellow "  2. Click 'New repository secret'"
-    yellow "  3. Name:  FLY_API_TOKEN"
-    yellow "  4. Value: (copied below)"
-    echo
-    echo "  $token"
-    echo
-    green "  Once added, every push to 'main' will auto-deploy."
+
+    bold "  Setting FLY_API_TOKEN as a GitHub repo secret..."
+    echo "$token" | gh secret set FLY_API_TOKEN
+
+    green "  FLY_API_TOKEN set. Every push to 'main' will auto-deploy."
     echo
 }
 
@@ -348,6 +482,7 @@ step_destroy() {
     red "  - App: $APP_NAME"
     red "  - Database: $DB_NAME"
     red "  - All volumes and data"
+    red "  - Cloudflare DNS records for $DOMAIN"
     echo
 
     printf "Type '%s' to confirm: " "$APP_NAME"
@@ -359,6 +494,16 @@ step_destroy() {
     fi
 
     echo
+
+    # Clean up Cloudflare DNS records.
+    if cf_load_env 2>/dev/null; then
+        bold "Removing Cloudflare DNS records..."
+        cf_delete_record "A"     "$DOMAIN"
+        cf_delete_record "AAAA"  "$DOMAIN"
+        cf_delete_record "CNAME" "www.${DOMAIN}"
+        echo
+    fi
+
     fly apps destroy "$APP_NAME" --yes 2>/dev/null || true
     fly apps destroy "$DB_NAME" --yes 2>/dev/null || true
     green "Destroyed."
@@ -421,7 +566,7 @@ case "${1:-}" in
         echo "  secrets  — set secrets from .env"
         echo "  migrate  — run migrations on deployed app"
         echo "  ci       — generate deploy token for GitHub Actions"
-        echo "  domain   — add custom domain and show DNS records"
+        echo "  domain   — allocate IPs, set Cloudflare DNS, and add Fly certs"
         echo "  status   — show app, db, and volume status"
         echo "  console  — open remote IEx console"
         echo "  destroy  — tear everything down"

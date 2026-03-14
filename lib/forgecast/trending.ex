@@ -298,12 +298,14 @@ defmodule Forgecast.Trending do
 
         where(query, [r],
             fragment(
-                "(lower(?) || ' ' || coalesce(lower(?), '') || ' ' || coalesce(lower(?), '')) LIKE ? ESCAPE '~'",
-                r.name, r.description, r.language, ^like_term
-            ) or
-            fragment(
-                "EXISTS (SELECT 1 FROM unnest(?) t WHERE lower(t) LIKE ? ESCAPE '~')",
-                r.topics, ^like_term
+                """
+                (lower(?) || ' ' ||
+                 coalesce(lower(?), '') || ' ' ||
+                 coalesce(lower(?), '') || ' ' ||
+                 coalesce(lower(immutable_array_to_string(?, ' ')), ''))
+                LIKE ? ESCAPE '~'
+                """,
+                r.name, r.description, r.language, r.topics, ^like_term
             )
         )
     end

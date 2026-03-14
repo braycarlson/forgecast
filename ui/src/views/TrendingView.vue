@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue"
 import { RouterLink } from "vue-router"
 import { useTheme } from "@/composables/useTheme"
 import { Button } from "@/components/ui/button"
@@ -50,6 +51,38 @@ const {
     showOgImage,
     setLayout,
 } = useTrending()
+
+const visiblePages = computed(() => {
+    const total = totalPages.value
+    const current = currentPage.value
+    const pages: (number | "ellipsis-start" | "ellipsis-end")[] = []
+
+    if (total <= 7) {
+        for (let i = 1; i <= total; i++) pages.push(i)
+        return pages
+    }
+
+    pages.push(1)
+
+    if (current > 3) {
+        pages.push("ellipsis-start")
+    }
+
+    const start = Math.max(2, current - 1)
+    const end = Math.min(total - 1, current + 1)
+
+    for (let i = start; i <= end; i++) {
+        pages.push(i)
+    }
+
+    if (current < total - 2) {
+        pages.push("ellipsis-end")
+    }
+
+    pages.push(total)
+
+    return pages
+})
 </script>
 
 <template>
@@ -179,25 +212,25 @@ const {
                                     <ChevronLeft class="h-4 w-4" />
                                 </PaginationPrevious>
 
-                                <template v-for="page in totalPages" :key="page">
+                                <template v-for="page in visiblePages" :key="page">
+                                    <PaginationEllipsis
+                                        v-if="typeof page === 'string'"
+                                        :index="page === 'ellipsis-start' ? 2 : totalPages - 1"
+                                    />
                                     <PaginationItem
-                                        v-if="page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1"
+                                        v-else
                                         :value="page"
                                         as-child
                                     >
                                         <Button
                                             :variant="page === currentPage ? 'default' : 'outline'"
                                             size="sm"
-                                            class="h-9 w-9 cursor-pointer"
+                                            class="h-9 !w-auto min-w-9 px-2.5 cursor-pointer"
                                             @click="currentPage = page"
                                         >
                                             {{ page }}
                                         </Button>
                                     </PaginationItem>
-                                    <PaginationEllipsis
-                                        v-else-if="page === 2 || page === totalPages - 1"
-                                        :index="page"
-                                    />
                                 </template>
 
                                 <PaginationNext>

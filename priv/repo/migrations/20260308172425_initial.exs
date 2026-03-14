@@ -148,16 +148,26 @@ defmodule Forgecast.Repo.Migrations.Initial do
         # Score worker: stale score detection
         execute "CREATE INDEX repos_score_updated_at ON repos (score_updated_at ASC NULLS FIRST)"
 
-        # Search: trgm on name/description/language
+        # Search: immutable wrapper for array_to_string (STABLE -> IMMUTABLE)
+        execute """
+        CREATE OR REPLACE FUNCTION immutable_array_to_string(arr text[], sep text)
+        RETURNS text AS $$
+            SELECT array_to_string(arr, sep);
+        $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE
+        """
+
+        # Search: trgm on name/description/language/topics
         execute """
         CREATE INDEX repos_search_trgm ON repos USING gin (
-            (lower(name) || ' ' || coalesce(lower(description), '') || ' ' || coalesce(lower(language), ''))
+            (
+                lower(name) || ' ' ||
+                coalesce(lower(description), '') || ' ' ||
+                coalesce(lower(language), '') || ' ' ||
+                coalesce(lower(immutable_array_to_string(topics, ' ')), '')
+            )
             gin_trgm_ops
         )
         """
-
-        # Search: GIN on topics array for unnest queries
-        execute "CREATE INDEX repos_topics_gin ON repos USING gin (topics)"
 
         # Case-insensitive lookups
         execute "CREATE INDEX repos_lower_name ON repos (lower(name))"
@@ -297,6 +307,7 @@ defmodule Forgecast.Repo.Migrations.Initial do
         execute "DROP TABLE IF EXISTS repos CASCADE"
         execute "DROP TABLE IF EXISTS users CASCADE"
         execute "DROP FUNCTION IF EXISTS estimated_row_count(text)"
+        execute "DROP FUNCTION IF EXISTS immutable_array_to_string(text[], text)"
         execute "DROP EXTENSION IF EXISTS pg_trgm"
         execute "DROP EXTENSION IF EXISTS timescaledb CASCADE"
     end
