@@ -26,7 +26,7 @@ const year = new Date().getFullYear()
                     <span class="h-3.5 w-px bg-border" />
 
                     <a
-                        href="https://github.com/braycarlson"
+                        href="https://github.com/braycarlson/forgecast"
                         target="_blank"
                         rel="noopener noreferrer"
                         class="transition-colors hover:text-foreground"
