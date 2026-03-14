@@ -169,7 +169,7 @@ const table = useVueTable({
 
 <template>
     <div class="overflow-x-auto rounded-lg border border-border">
-        <Table class="min-w-[800px]">
+        <Table class="min-w-[800px] sm:min-w-0 w-full">
             <TableHeader>
                 <TableRow v-for="headerGroup in table.getHeaderGroups()" :key="headerGroup.id">
                     <TableHead

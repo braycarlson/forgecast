@@ -89,13 +89,6 @@ function toggleExpanded(event: Event) {
                     @error="emit('imageError', repo.id)"
                 />
 
-                <div
-                    v-if="formatVelocity(repo.star_velocity)"
-                    class="absolute top-3 right-3 z-10 flex items-center gap-1 rounded-full bg-green-500/15 px-2.5 py-1 text-xs font-medium text-green-400 backdrop-blur-sm ring-1 ring-green-400/20"
-                >
-                    <TrendingUp class="h-3 w-3" />
-                    {{ formatVelocity(repo.star_velocity) }}
-                </div>
             </div>
 
             <div class="flex min-w-0 flex-1 flex-col p-4 pb-0">
