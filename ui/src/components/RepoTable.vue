@@ -58,7 +58,7 @@ const columns: ColumnDef<Repo>[] = [
                     ]),
                     repo.description
                         ? h("p", {
-                            class: "text-[11px] text-muted-foreground/70 leading-relaxed truncate max-w-md",
+                            class: "text-[11px] text-muted-foreground/70 leading-snug truncate max-w-[250px]",
                         }, repo.description)
                         : null,
                 ]),
@@ -217,7 +217,7 @@ const table = useVueTable({
         class="overflow-x-auto rounded-lg border border-border text-xs cursor-grab"
         @mousedown="onMouseDown"
     >
-        <Table class="min-w-[700px] sm:min-w-0 w-full">
+        <Table class="min-w-[800px] w-full">
             <TableHeader>
                 <TableRow v-for="headerGroup in table.getHeaderGroups()" :key="headerGroup.id">
                     <TableHead
