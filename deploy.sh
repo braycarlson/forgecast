@@ -43,6 +43,12 @@ if ! command -v fly &>/dev/null; then
     exit 1
 fi
 
+# Same wrapper for GitHub CLI.
+if ! command -v gh &>/dev/null && command -v gh.exe &>/dev/null; then
+    gh() { gh.exe "$@"; }
+    export -f gh
+fi
+
 APP_NAME="forgecast"
 REGION="yyz"
 DB_NAME="forgecast-db"
@@ -89,8 +95,8 @@ volume_exists() {
 cf_load_env() {
     if [ -z "$CF_API_TOKEN" ] || [ -z "$CF_ZONE_ID" ]; then
         if [ -f "$ENV_FILE" ]; then
-            CF_API_TOKEN="${CF_API_TOKEN:-$(grep -E '^CF_API_TOKEN=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed "s/^['\"]//;s/['\"]$//" || true)}"
-            CF_ZONE_ID="${CF_ZONE_ID:-$(grep -E '^CF_ZONE_ID=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed "s/^['\"]//;s/['\"]$//" || true)}"
+            CF_API_TOKEN="${CF_API_TOKEN:-$(grep -E '^CF_API_TOKEN=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed "s/^['\"]//;s/['\"]$//;s/\r//" || true)}"
+            CF_ZONE_ID="${CF_ZONE_ID:-$(grep -E '^CF_ZONE_ID=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | sed "s/^['\"]//;s/['\"]$//;s/\r//" || true)}"
         fi
     fi
 
@@ -124,7 +130,7 @@ cf_find_record() {
     local name="$2"
 
     cf_api GET "/dns_records?type=${type}&name=${name}" \
-        | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4
+        | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4 || true
 }
 
 cf_upsert_record() {
@@ -133,21 +139,27 @@ cf_upsert_record() {
     local content="$3"
     local proxied="${4:-false}"
 
-    local payload
-    payload=$(cat <<EOF
-{"type":"${type}","name":"${name}","content":"${content}","proxied":${proxied},"ttl":1}
-EOF
-    )
+    local payload="{\"type\":\"${type}\",\"name\":\"${name}\",\"content\":\"${content}\",\"proxied\":${proxied},\"ttl\":1}"
 
     local existing_id
     existing_id=$(cf_find_record "$type" "$name")
 
+    local response
     if [ -n "$existing_id" ]; then
-        cf_api PATCH "/dns_records/${existing_id}" "$payload" > /dev/null
-        green "  Updated ${type} record: ${name} -> ${content}"
+        response=$(cf_api PATCH "/dns_records/${existing_id}" "$payload")
     else
-        cf_api POST "/dns_records" "$payload" > /dev/null
-        green "  Created ${type} record: ${name} -> ${content}"
+        response=$(cf_api POST "/dns_records" "$payload")
+    fi
+
+    if echo "$response" | grep -q '"success":true'; then
+        if [ -n "$existing_id" ]; then
+            green "  Updated ${type} record: ${name} -> ${content}"
+        else
+            green "  Created ${type} record: ${name} -> ${content}"
+        fi
+    else
+        red "  Failed ${type} record: ${name}"
+        echo "  $response"
     fi
 }
 
@@ -296,8 +308,10 @@ step_set_secrets() {
             value=""
         fi
 
-        # CF_ vars are for the deploy script, not Fly secrets.
-        [[ "$key" == CF_API_TOKEN || "$key" == CF_ZONE_ID ]] && continue
+        # Skip keys managed by fly.toml or the deploy script.
+        for sk in $skip_keys; do
+            [[ "$key" == "$sk" ]] && continue 2
+        done
 
         if [ -z "$value" ]; then
             existing=$(fly secrets list --app "$APP_NAME" 2>/dev/null | grep "$key" || true)
@@ -384,24 +398,24 @@ step_domain() {
     bold "  Allocating IPs..."
 
     local ip_json
-    ip_json=$(fly ips list --app "$APP_NAME" --json 2>/dev/null)
+    ip_json=$(fly ips list --app "$APP_NAME" --json 2>/dev/null || echo "[]")
 
     local ipv4
-    ipv4=$(echo "$ip_json" | grep -o '"Address":"[^"]*"' | grep -v ':' | head -1 | cut -d'"' -f4)
+    ipv4=$(echo "$ip_json" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
 
     local ipv6
-    ipv6=$(echo "$ip_json" | grep -o '"Address":"[^"]*"' | grep ':' | head -1 | cut -d'"' -f4)
+    ipv6=$(echo "$ip_json" | grep -oE '[0-9a-f]+:[0-9a-f:]+' | head -1 || true)
 
     if [ -z "$ipv4" ]; then
         fly ips allocate-v4 --app "$APP_NAME" --yes
-        ipv4=$(fly ips list --app "$APP_NAME" --json 2>/dev/null \
-            | grep -o '"Address":"[^"]*"' | grep -v ':' | head -1 | cut -d'"' -f4)
+        ip_json=$(fly ips list --app "$APP_NAME" --json 2>/dev/null || echo "[]")
+        ipv4=$(echo "$ip_json" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
     fi
 
     if [ -z "$ipv6" ]; then
         fly ips allocate-v6 --app "$APP_NAME"
-        ipv6=$(fly ips list --app "$APP_NAME" --json 2>/dev/null \
-            | grep -o '"Address":"[^"]*"' | grep ':' | head -1 | cut -d'"' -f4)
+        ip_json=$(fly ips list --app "$APP_NAME" --json 2>/dev/null || echo "[]")
+        ipv6=$(echo "$ip_json" | grep -oE '[0-9a-f]+:[0-9a-f:]+' | head -1 || true)
     fi
 
     green "  IPv4: $ipv4"
@@ -411,9 +425,10 @@ step_domain() {
     # Set Cloudflare DNS records (not proxied — Fly handles SSL).
     bold "  Configuring Cloudflare DNS..."
 
-    cf_upsert_record "A"    "$DOMAIN"       "$ipv4" false
-    cf_upsert_record "AAAA" "$DOMAIN"       "$ipv6" false
-    cf_upsert_record "CNAME" "www.${DOMAIN}" "$DOMAIN" false
+    cf_upsert_record "A"    "$DOMAIN"        "$ipv4" false
+    cf_upsert_record "AAAA" "$DOMAIN"        "$ipv6" false
+    cf_upsert_record "A"    "www.${DOMAIN}"  "$ipv4" false
+    cf_upsert_record "AAAA" "www.${DOMAIN}"  "$ipv6" false
 
     echo
 
@@ -470,9 +485,31 @@ step_ci() {
     echo
 
     bold "  Setting FLY_API_TOKEN as a GitHub repo secret..."
-    echo "$token" | gh secret set FLY_API_TOKEN
 
-    green "  FLY_API_TOKEN set. Every push to 'main' will auto-deploy."
+    local repo
+    repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
+
+    if [ -z "$repo" ]; then
+        repo=$(git remote get-url origin 2>/dev/null | sed 's|.*github\.com[:/]||;s|\.git$||' || true)
+    fi
+
+    if [ -z "$repo" ]; then
+        yellow "  Could not detect GitHub repo from git remote."
+        yellow "  Run this from your Windows terminal instead:"
+        echo
+        echo "  gh secret set FLY_API_TOKEN --body \"$token\""
+        echo
+        return
+    fi
+
+    if gh secret set FLY_API_TOKEN --body "$token" --repo "$repo"; then
+        green "  FLY_API_TOKEN set. Every push to 'main' will auto-deploy."
+    else
+        yellow "  Could not set secret automatically."
+        yellow "  Run this from your Windows terminal instead:"
+        echo
+        echo "  gh secret set FLY_API_TOKEN --body \"$token\" --repo $repo"
+    fi
     echo
 }
 
@@ -500,7 +537,8 @@ step_destroy() {
         bold "Removing Cloudflare DNS records..."
         cf_delete_record "A"     "$DOMAIN"
         cf_delete_record "AAAA"  "$DOMAIN"
-        cf_delete_record "CNAME" "www.${DOMAIN}"
+        cf_delete_record "A"     "www.${DOMAIN}"
+        cf_delete_record "AAAA"  "www.${DOMAIN}"
         echo
     fi
 
