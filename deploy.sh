@@ -57,7 +57,7 @@ VOLUME_NAME="forgecast"
 VOLUME_SIZE_GB=1
 DB_VOLUME_SIZE_GB=10
 DOMAIN="forgecast.io"
-ENV_FILE=".env"
+ENV_FILE=".env.prod"
 
 # Cloudflare — loaded from .env or environment.
 CF_API_TOKEN="${CF_API_TOKEN:-}"
@@ -279,7 +279,7 @@ step_set_secrets() {
 
     # Secrets already defined in fly.toml [env] — skip these
     # and unset them if they were previously set as secrets.
-    skip_keys="POLLER MIX_ENV PORT GITHUB_OAUTH_REDIRECT_URI CF_API_TOKEN CF_ZONE_ID"
+    skip_keys="MIX_ENV PORT GITHUB_OAUTH_REDIRECT_URI CF_API_TOKEN CF_ZONE_ID CORS_ORIGINS"
 
     unset_args=()
     for sk in $skip_keys; do
@@ -332,6 +332,9 @@ step_set_secrets() {
             secrets_args+=("${key}=${value}")
         fi
     done < "$ENV_FILE"
+
+    secrets_args+=("CORS_ORIGINS=https://${DOMAIN}")
+    green "  CORS_ORIGINS=https://${DOMAIN}"
 
     if [ ${#secrets_args[@]} -gt 0 ]; then
         fly secrets set --app "$APP_NAME" "${secrets_args[@]}"
@@ -435,8 +438,20 @@ step_domain() {
     # Add certs in Fly.
     bold "  Requesting Fly TLS certificates..."
 
-    fly certs add "$DOMAIN" --app "$APP_NAME" 2>&1 || true
-    fly certs add "www.${DOMAIN}" --app "$APP_NAME" 2>&1 || true
+    local certs_json
+    certs_json=$(fly certs list --app "$APP_NAME" --json 2>/dev/null || echo "[]")
+
+    if echo "$certs_json" | grep -q "\"$DOMAIN\""; then
+        green "  Certificate for $DOMAIN already exists."
+    else
+        fly certs add "$DOMAIN" --app "$APP_NAME" 2>&1 || true
+    fi
+
+    if echo "$certs_json" | grep -q "\"www.${DOMAIN}\""; then
+        green "  Certificate for www.${DOMAIN} already exists."
+    else
+        fly certs add "www.${DOMAIN}" --app "$APP_NAME" 2>&1 || true
+    fi
 
     echo
     green "  DNS and certificates configured."

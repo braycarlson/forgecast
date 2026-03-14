@@ -16,6 +16,8 @@ defmodule Forgecast.Api.Router do
         cache_control_for_etags: "public, max-age=31536000, immutable",
         only: ~w(assets favicon.ico favicon.svg favicon-96x96.png apple-touch-icon.png forgecast.svg site.webmanifest web-app-manifest-192x192.png web-app-manifest-512x512.png)
 
+    plug Forgecast.Api.Plugs.Redirect
+
     plug :cors
     plug :match
     plug Plug.Parsers, parsers: [:json], json_decoder: Jason

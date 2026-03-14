@@ -38,7 +38,8 @@ if config_env() == :prod do
     config :forgecast, :server,
         port: String.to_integer(System.get_env("PORT", "4000")),
         secure_cookies: true,
-        cors_origins: cors_origins
+        cors_origins: cors_origins,
+        canonical_host: "forgecast.io"
 end
 
 if config_env() == :dev do
