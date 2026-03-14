@@ -43,7 +43,7 @@ const columns: ColumnDef<Repo>[] = [
                     ? h("img", {
                         src: repo.avatar_url,
                         alt: repo.owner,
-                        class: "h-8 w-8 shrink-0 rounded-full mt-0.5",
+                        class: "h-6 w-6 shrink-0 rounded-full mt-0.5",
                     })
                     : null,
                 h("div", { class: "min-w-0" }, [
@@ -53,12 +53,12 @@ const columns: ColumnDef<Repo>[] = [
                         rel: "noopener noreferrer",
                         class: "flex items-center gap-1 font-medium text-primary hover:underline",
                     }, [
-                        h("span", { class: "truncate" }, `${repo.owner}/${repo.name}`),
-                        h(ExternalLink, { class: "h-3 w-3 shrink-0 opacity-50" }),
+                        h("span", { class: "truncate" }, repo.name),
+                        h(ExternalLink, { class: "h-2.5 w-2.5 shrink-0 opacity-50" }),
                     ]),
                     repo.description
                         ? h("p", {
-                            class: "text-xs text-muted-foreground/70 leading-relaxed truncate max-w-lg",
+                            class: "text-[11px] text-muted-foreground/70 leading-relaxed truncate max-w-md",
                         }, repo.description)
                         : null,
                 ]),
@@ -74,9 +74,9 @@ const columns: ColumnDef<Repo>[] = [
             const lang = row.getValue<string | null>("language")
             if (!lang) return h("span", { class: "text-muted-foreground/40" }, "—")
             const color = LANGUAGE_COLORS[lang] ?? "#6b7280"
-            return h("div", { class: "flex items-center justify-center gap-2 text-sm" }, [
+            return h("div", { class: "flex items-center justify-center gap-2 text-xs" }, [
                 h("span", {
-                    class: "h-2.5 w-2.5 shrink-0 rounded-full",
+                    class: "h-2 w-2 shrink-0 rounded-full",
                     style: { backgroundColor: color },
                 }),
                 lang,
@@ -89,8 +89,8 @@ const columns: ColumnDef<Repo>[] = [
         meta: { class: "text-center" },
         header: ({ column }) => h(SortableHeader, { column, label: "Stars", align: "center" }),
         cell: ({ row }) => {
-            return h("div", { class: "flex items-center justify-center gap-1.5 tabular-nums text-sm" }, [
-                h(Star, { class: "h-3.5 w-3.5 text-muted-foreground" }),
+            return h("div", { class: "flex items-center justify-center gap-1.5 tabular-nums" }, [
+                h(Star, { class: "h-3 w-3 text-muted-foreground" }),
                 formatNumber(row.getValue<number>("stars")),
             ])
         },
@@ -101,8 +101,8 @@ const columns: ColumnDef<Repo>[] = [
         meta: { class: "text-center" },
         header: ({ column }) => h(SortableHeader, { column, label: "Forks", align: "center" }),
         cell: ({ row }) => {
-            return h("div", { class: "flex items-center justify-center gap-1.5 tabular-nums text-sm" }, [
-                h(GitFork, { class: "h-3.5 w-3.5 text-muted-foreground" }),
+            return h("div", { class: "flex items-center justify-center gap-1.5 tabular-nums" }, [
+                h(GitFork, { class: "h-3 w-3 text-muted-foreground" }),
                 formatNumber(row.getValue<number>("forks")),
             ])
         },
@@ -118,18 +118,18 @@ const columns: ColumnDef<Repo>[] = [
             if (formatted) {
                 return h("div", { class: "flex justify-center" }, [
                     h("span", {
-                        class: "inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2.5 py-1 text-xs font-medium text-green-400 ring-1 ring-green-400/20",
+                        class: "inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] font-medium text-green-400 ring-1 ring-green-400/20",
                     }, [
-                        h(TrendingUp, { class: "h-3 w-3" }),
+                        h(TrendingUp, { class: "h-2.5 w-2.5" }),
                         formatted,
                     ]),
                 ])
             }
             return h("div", { class: "flex justify-center" }, [
                 h("span", {
-                    class: "inline-flex items-center gap-1 rounded-full bg-muted/50 px-2.5 py-1 text-xs text-muted-foreground/40 ring-1 ring-border/30",
+                    class: "inline-flex items-center gap-1 rounded-full bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground/40 ring-1 ring-border/30",
                 }, [
-                    h(TrendingUp, { class: "h-3 w-3" }),
+                    h(TrendingUp, { class: "h-2.5 w-2.5" }),
                     "—",
                 ]),
             ])
@@ -168,8 +168,8 @@ const table = useVueTable({
 </script>
 
 <template>
-    <div class="overflow-x-auto rounded-lg border border-border">
-        <Table class="min-w-[800px] sm:min-w-0 w-full">
+    <div class="overflow-x-auto rounded-lg border border-border text-xs">
+        <Table class="min-w-[700px] sm:min-w-0 w-full">
             <TableHeader>
                 <TableRow v-for="headerGroup in table.getHeaderGroups()" :key="headerGroup.id">
                     <TableHead
@@ -195,7 +195,7 @@ const table = useVueTable({
                         v-for="cell in row.getVisibleCells()"
                         :key="cell.id"
                         :class="[
-                            'py-3',
+                            'py-2.5',
                             (cell.column.columnDef.meta as Record<string, string>)?.class,
                         ]"
                     >
