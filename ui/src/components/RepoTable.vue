@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { h } from "vue"
+import { h, ref, onMounted, onUnmounted } from "vue"
 import type { ColumnDef, SortingState } from "@tanstack/vue-table"
 import {
     FlexRender,
@@ -151,6 +151,50 @@ const columns: ColumnDef<Repo>[] = [
     },
 ]
 
+const scrollRef = ref<HTMLDivElement | null>(null)
+const isDragging = ref(false)
+let startX = 0
+let scrollLeft = 0
+
+function onMouseDown(e: MouseEvent) {
+    const el = scrollRef.value
+    if (!el || el.scrollWidth <= el.clientWidth) return
+    isDragging.value = true
+    startX = e.pageX - el.offsetLeft
+    scrollLeft = el.scrollLeft
+    el.style.cursor = "grabbing"
+    el.style.userSelect = "none"
+}
+
+function onMouseMove(e: MouseEvent) {
+    if (!isDragging.value) return
+    const el = scrollRef.value
+    if (!el) return
+    e.preventDefault()
+    const x = e.pageX - el.offsetLeft
+    el.scrollLeft = scrollLeft - (x - startX)
+}
+
+function onMouseUp() {
+    if (!isDragging.value) return
+    isDragging.value = false
+    const el = scrollRef.value
+    if (el) {
+        el.style.cursor = ""
+        el.style.userSelect = ""
+    }
+}
+
+onMounted(() => {
+    document.addEventListener("mousemove", onMouseMove)
+    document.addEventListener("mouseup", onMouseUp)
+})
+
+onUnmounted(() => {
+    document.removeEventListener("mousemove", onMouseMove)
+    document.removeEventListener("mouseup", onMouseUp)
+})
+
 const table = useVueTable({
     get data() { return props.repos },
     get columns() { return columns },
@@ -168,7 +212,11 @@ const table = useVueTable({
 </script>
 
 <template>
-    <div class="overflow-x-auto rounded-lg border border-border text-xs">
+    <div
+        ref="scrollRef"
+        class="overflow-x-auto rounded-lg border border-border text-xs cursor-grab"
+        @mousedown="onMouseDown"
+    >
         <Table class="min-w-[700px] sm:min-w-0 w-full">
             <TableHeader>
                 <TableRow v-for="headerGroup in table.getHeaderGroups()" :key="headerGroup.id">
