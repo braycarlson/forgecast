@@ -1,16 +1,14 @@
-<div align="center">
-
-<a href="https://forgecast.io">
-    <img src="assets/forgecast.svg" alt="Forgecast" width="200" />
-</a>
-
-# Forgecast
-
-Track trending repositories across GitHub, GitLab, and Codeberg in real time.
+<p align="center">
+    <a href="https://forgecast.io">
+        <img src="assets/forgecast.svg" alt="Forgecast" width="150" />
+    </a>
+    <br>
+    <font size="7"><strong>Forgecast</strong></font>
+    <br><br>
+    Track trending repositories across GitHub, GitLab, and Codeberg in real time.
+</p>
 
 ---
-
-</div>
 
 Forgecast surfaces repositories gaining traction right now. It combines live event streams with search-based polling across three platforms, computing star and fork velocity on a rolling window so you can see what's trending — not just what's already popular.
 
