@@ -1,17 +1,18 @@
 <div align="center">
-    <a href="https://forgecast.io">
-        <img src="assets/forgecast.svg" alt="Forgecast" width="120" />
-        <h1>Forgecast</h1>
-    </a>
-</div>
 
-<p align="center">
-    Track trending repositories across GitHub, GitLab, and Codeberg in real time.
-</p>
+<a href="https://forgecast.io">
+    <img src="assets/forgecast.svg" alt="Forgecast" width="200" />
+</a>
+
+# Forgecast
+
+Track trending repositories across GitHub, GitLab, and Codeberg in real time.
 
 ---
 
-Forgecast surfaces repositories gaining traction right now. It combines live event streams with search-based polling across three platforms, computing star and fork velocity on a rolling window so you can see what's trending - not just what's already popular.
+</div>
+
+Forgecast surfaces repositories gaining traction right now. It combines live event streams with search-based polling across three platforms, computing star and fork velocity on a rolling window so you can see what's trending — not just what's already popular.
 
 ## Features
 
@@ -49,7 +50,6 @@ git clone https://github.com/braycarlson/forgecast.git
 cd forgecast
 just docker-reset
 ```
-
 ## Environment Variables
 
 | Variable | Description |
