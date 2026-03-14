@@ -39,7 +39,7 @@ if config_env() == :prod do
         port: String.to_integer(System.get_env("PORT", "4000")),
         secure_cookies: true,
         cors_origins: cors_origins,
-        canonical_host: "forgecast.io"
+        canonical_host: if(System.get_env("FLY_APP_NAME"), do: "forgecast.io")
 end
 
 if config_env() == :dev do

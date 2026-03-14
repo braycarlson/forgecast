@@ -11,6 +11,7 @@
 #   ./deploy.sh setup    — full first-time setup (app + db + volume + secrets + deploy)
 #   ./deploy.sh deploy   — deploy only (assumes app and db already exist)
 #   ./deploy.sh db       — create and attach the database only
+#   ./deploy.sh db-reset — destroy and recreate the database (keeps app + volumes)
 #   ./deploy.sh secrets  — set secrets from .env interactively
 #   ./deploy.sh migrate  — run migrations on the deployed app
 #   ./deploy.sh ci       — generate deploy token for GitHub Actions
@@ -391,6 +392,49 @@ step_console() {
     fly ssh console --app "$APP_NAME" -C '/app/bin/forgecast remote'
 }
 
+step_db_reset() {
+    bold "Database and volume reset"
+    echo
+
+    if ! app_exists; then
+        red "  App '$APP_NAME' does not exist. Nothing to reset."
+        return
+    fi
+
+    if db_exists; then
+        bold "  Detaching database from app..."
+        fly postgres detach "$DB_NAME" --app "$APP_NAME" 2>/dev/null || true
+
+        bold "  Destroying database '$DB_NAME'..."
+        fly apps destroy "$DB_NAME" --yes 2>/dev/null || true
+
+        green "  Database destroyed."
+    else
+        yellow "  Database '$DB_NAME' does not exist, skipping destroy."
+    fi
+
+    echo
+
+    if volume_exists; then
+        bold "  Destroying volumes..."
+        local vol_ids
+        vol_ids=$(fly volumes list --app "$APP_NAME" --json 2>/dev/null \
+            | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+
+        for vid in $vol_ids; do
+            fly volumes destroy "$vid" --app "$APP_NAME" --yes 2>/dev/null || true
+        done
+
+        green "  Volumes destroyed."
+    else
+        yellow "  No volumes found, skipping."
+    fi
+
+    echo
+    step_create_db
+    step_create_volume
+}
+
 step_domain() {
     bold "Custom domain setup"
     echo
@@ -589,6 +633,9 @@ case "${1:-}" in
     db)
         step_create_db
         ;;
+    db-reset)
+        step_db_reset
+        ;;
     secrets)
         step_set_secrets
         ;;
@@ -616,6 +663,7 @@ case "${1:-}" in
         echo "  setup    — full first-time setup (app + db + volume + secrets + deploy)"
         echo "  deploy   — deploy only"
         echo "  db       — create and attach database (TimescaleDB)"
+        echo "  db-reset — destroy and recreate the database (keeps app + volumes)"
         echo "  secrets  — set secrets from .env"
         echo "  migrate  — run migrations on deployed app"
         echo "  ci       — generate deploy token for GitHub Actions"

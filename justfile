@@ -207,6 +207,11 @@ fly-db:
     {{clear}}
     bash deploy.sh db
 
+# Destroy and recreate the Fly Postgres database.
+fly-db-reset:
+    {{clear}}
+    bash deploy.sh db-reset
+
 # Generate deploy token for GitHub Actions auto-deploy.
 fly-ci:
     {{clear}}
