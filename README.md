@@ -1,17 +1,12 @@
-<h1 align="center">
+<div align="center">
     <a href="https://forgecast.io">
         <img src="assets/forgecast.svg" alt="Forgecast" width="120" />
-        <br>
-        Forgecast
+        <h1>Forgecast</h1>
     </a>
-</h1>
+</div>
 
 <p align="center">
     Track trending repositories across GitHub, GitLab, and Codeberg in real time.
-</p>
-
-<p align="center">
-    <a href="https://forgecast.io">forgecast.io</a>
 </p>
 
 ---

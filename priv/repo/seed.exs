@@ -1,8 +1,6 @@
 alias Forgecast.Repo
 alias Forgecast.Schema.{Repository, Snapshot}
 
-import Ecto.Query
-
 count =
     case System.argv() do
         [n] -> String.to_integer(n)
