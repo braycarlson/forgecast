@@ -37,6 +37,7 @@ const {
     totalItems,
     timeWindow,
     sorting,
+    hideEmpty,
     allPlatforms,
     allLanguages,
     selectedPlatforms,
@@ -131,6 +132,7 @@ const visiblePages = computed(() => {
                         :per-page="perPage"
                         :time-window="timeWindow"
                         :sorting="sorting"
+                        :hide-empty="hideEmpty"
                         :all-platforms="allPlatforms"
                         :all-languages="allLanguages"
                         :selected-platforms="selectedPlatforms"
@@ -142,6 +144,7 @@ const visiblePages = computed(() => {
                         @update:per-page="perPage = $event"
                         @update:time-window="timeWindow = $event"
                         @update:sorting="sorting = $event"
+                        @update:hide-empty="hideEmpty = $event"
                         @toggle-platform="togglePlatform"
                         @toggle-language="toggleLanguage"
                         @toggle-favorite-platform="toggleFavoritePlatform"

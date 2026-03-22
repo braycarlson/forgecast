@@ -43,6 +43,7 @@ export function useTrending() {
         sorting.value = []
         pagination.perPage.value = "12"
         timeWindow.value = "24"
+        hideEmpty.value = true
         pagination.resetPage()
         url.clear()
         fetchRepos()
@@ -64,6 +65,7 @@ export function useTrending() {
     const layout = ref<Layout>(url.queryString("layout", "grid") as Layout)
     const timeWindow = ref(url.queryString("window", "24"))
     const sorting = ref<SortingState>(url.initialSorting())
+    const hideEmpty = ref(url.queryString("hide_empty", "true") !== "false")
 
     const imageErrors = ref(new Set<number>())
 
@@ -77,6 +79,7 @@ export function useTrending() {
             timeWindow: timeWindow.value,
             layout: layout.value,
             sorting: sorting.value,
+            hideEmpty: hideEmpty.value,
         })
     }
 
@@ -134,6 +137,9 @@ export function useTrending() {
             if (searchQuery.value) {
                 params.set("search", searchQuery.value)
             }
+            if (!hideEmpty.value) {
+                params.set("hide_empty", "false")
+            }
 
             const first = sorting.value[0]
             if (first) {
@@ -166,7 +172,7 @@ export function useTrending() {
     }
 
     watchDebounced(
-        [filters.selectedPlatforms, filters.selectedLanguages, pagination.perPage, timeWindow],
+        [filters.selectedPlatforms, filters.selectedLanguages, pagination.perPage, timeWindow, hideEmpty],
         () => {
             pagination.resetPage()
             syncUrl()
@@ -211,6 +217,7 @@ export function useTrending() {
         sorting.value = []
         pagination.perPage.value = "12"
         timeWindow.value = "24"
+        hideEmpty.value = true
         layout.value = "grid"
         pagination.resetPage()
         url.clear()
@@ -232,6 +239,7 @@ export function useTrending() {
         totalItems: pagination.totalItems,
         timeWindow,
         sorting,
+        hideEmpty,
         allPlatforms: filters.allPlatforms,
         allLanguages: filters.allLanguages,
         selectedPlatforms: filters.selectedPlatforms,

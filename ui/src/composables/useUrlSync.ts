@@ -34,6 +34,7 @@ export function useUrlSync() {
         timeWindow: string
         layout: Layout
         sorting: SortingState
+        hideEmpty: boolean
     }
 
     function sync(params: SyncParams) {
@@ -46,6 +47,7 @@ export function useUrlSync() {
         if (params.perPage !== "12") query.per_page = params.perPage
         if (params.timeWindow !== "24") query.window = params.timeWindow
         if (params.layout !== "grid") query.layout = params.layout
+        if (!params.hideEmpty) query.hide_empty = "false"
 
         const first = params.sorting[0]
         if (first) {

@@ -45,6 +45,7 @@ defmodule Forgecast.Api.Router do
         per_page = parse_int(conn.query_params["per_page"], 12) |> clamp(1, max_per_page)
         sort = parse_sort(conn.query_params["sort"])
         dir = parse_dir(conn.query_params["dir"])
+        hide_empty = parse_bool(conn.query_params["hide_empty"], true)
 
         results = Forgecast.score(
             platform: platform,
@@ -54,7 +55,8 @@ defmodule Forgecast.Api.Router do
             page: page,
             per_page: per_page,
             sort: sort,
-            dir: dir
+            dir: dir,
+            hide_empty: hide_empty
         )
 
         conn
@@ -321,6 +323,11 @@ defmodule Forgecast.Api.Router do
     defp parse_dir("asc"), do: :asc
     defp parse_dir("desc"), do: :desc
     defp parse_dir(_), do: nil
+
+    defp parse_bool(nil, default), do: default
+    defp parse_bool("false", _default), do: false
+    defp parse_bool("0", _default), do: false
+    defp parse_bool(_, _default), do: true
 
     defp clamp(val, lo, hi), do: val |> max(lo) |> min(hi)
 

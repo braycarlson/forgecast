@@ -28,6 +28,7 @@ const props = defineProps<{
     perPage: string
     timeWindow: string
     sorting: SortingState
+    hideEmpty: boolean
     allPlatforms: string[]
     allLanguages: string[]
     selectedPlatforms: ReadonlySet<string>
@@ -42,6 +43,7 @@ const emit = defineEmits<{
     "update:perPage": [value: string]
     "update:timeWindow": [value: string]
     "update:sorting": [value: SortingState]
+    "update:hideEmpty": [value: boolean]
     "update:selectedPlatforms": [value: Set<string>]
     "update:selectedLanguages": [value: Set<string>]
     togglePlatform: [value: string]
@@ -63,6 +65,7 @@ const filterCount = computed(() => {
     if (props.timeWindow !== "24") count++
     if (props.sorting.length > 0) count++
     if (props.perPage !== "12") count++
+    if (!props.hideEmpty) count++
     return count
 })
 
@@ -313,6 +316,16 @@ function onSortSelect(key: string, defaultDesc: boolean) {
                                 </SelectContent>
                             </Select>
                         </div>
+
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                :checked="hideEmpty"
+                                class="h-4 w-4 rounded border-input accent-primary"
+                                @change="emit('update:hideEmpty', ($event.target as HTMLInputElement).checked)"
+                            />
+                            <span class="text-sm text-foreground">Hide empty repos</span>
+                        </label>
                     </div>
                 </PopoverContent>
             </Popover>
@@ -537,6 +550,16 @@ function onSortSelect(key: string, defaultDesc: boolean) {
                             </div>
                             <ChevronRight class="h-4 w-4 text-muted-foreground" />
                         </button>
+
+                        <label class="flex items-center gap-4 rounded-lg px-4 py-4 hover:bg-accent active:bg-accent transition-colors cursor-pointer">
+                            <input
+                                type="checkbox"
+                                :checked="hideEmpty"
+                                class="h-4 w-4 rounded border-input accent-primary"
+                                @change="emit('update:hideEmpty', ($event.target as HTMLInputElement).checked)"
+                            />
+                            <span class="text-sm font-medium">Hide empty repos</span>
+                        </label>
                     </div>
                 </div>
 

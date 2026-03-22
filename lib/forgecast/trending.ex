@@ -25,6 +25,7 @@ defmodule Forgecast.Trending do
     @filters_cache_key :__available_filters__
     @filters_ttl_ms 300_000
     @search_count_cap 10_000
+    @max_pagination_offset 12_000
 
     @spec init_cache() :: :ok
     def init_cache do
@@ -191,12 +192,13 @@ defmodule Forgecast.Trending do
         per_page = Keyword.get(opts, :per_page, 12)
         sort = Keyword.get(opts, :sort)
         dir = Keyword.get(opts, :dir)
+        hide_empty = Keyword.get(opts, :hide_empty, true)
 
         filtered? = not is_nil(platform) or not is_nil(language)
         searching? = is_binary(search) and search != ""
 
-        base = base_query(platform, language, search)
-        total = count_results(base, searching?, filtered?)
+        base = base_query(platform, language, search, hide_empty)
+        total = count_results(base, searching?, filtered? or hide_empty)
         {sort_field, sort_dir} = resolve_sort(sort, dir)
         decoded_cursor = decode_cursor(cursor)
 
@@ -205,11 +207,15 @@ defmodule Forgecast.Trending do
             |> apply_cursor(decoded_cursor, sort_field, sort_dir)
             |> apply_sort_with_tiebreaker(sort_field, sort_dir)
 
+        max_page = max(ceil(total / per_page), 1)
+        capped_pages = min(max_page, div(@max_pagination_offset, per_page))
+        safe_page = min(page, capped_pages)
+
         items_query =
             if decoded_cursor do
                 limit(items_query, ^(per_page + 1))
             else
-                offset = (page - 1) * per_page
+                offset = (safe_page - 1) * per_page
 
                 items_query
                 |> offset(^offset)
@@ -256,16 +262,23 @@ defmodule Forgecast.Trending do
         %{
             items: items,
             total: total,
-            page: page,
+            page: safe_page,
             per_page: per_page,
-            total_pages: max(ceil(total / per_page), 1),
+            total_pages: capped_pages,
             next_cursor: next_cursor,
             has_more: has_more
         }
     end
 
-    defp base_query(platform, language, search) do
+    defp base_query(platform, language, search, hide_empty) do
         query = from(r in Repository, where: r.active == true)
+
+        query =
+            if hide_empty do
+                where(query, [r], r.stars > 0 or r.forks > 0)
+            else
+                query
+            end
 
         query = apply_filter(query, :platform, platform)
         query = apply_filter(query, :language, language)
@@ -389,14 +402,15 @@ defmodule Forgecast.Trending do
         min(Repo.one(bounded), @search_count_cap)
     end
 
-    # No search, but filtered by platform/language: exact count
-    # is cheap on the partial indexes covering those columns.
+    # Any filter applied (platform, language, hide_empty): exact count
+    # is cheap on the indexed columns. This also covers the default
+    # hide_empty=true case, ensuring pagination matches the real set.
     defp count_results(query, false, true = _filtered?) do
         Repo.one(from(r in query, select: count(r.id)))
     end
 
-    # Unfiltered, no search: use pg_class estimate to avoid a
-    # full index scan on millions of active rows.
+    # Completely unfiltered (hide_empty=false, no platform/language):
+    # use pg_class estimate to avoid a full index scan.
     defp count_results(_query, false, false) do
         case Repo.query(
             "SELECT GREATEST(reltuples::bigint, 0) FROM pg_class WHERE relname = 'repos'",

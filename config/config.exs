@@ -11,7 +11,7 @@ config :forgecast, :server,
     cors_origins: ["http://localhost:5173"]
 
 config :forgecast, :poller,
-    profile: :discovery,
+    profile: :balanced,
     platforms: [
         {Forgecast.Platform.Github, "github"},
         {Forgecast.Platform.Codeberg, "codeberg"},
